@@ -64,9 +64,9 @@ def _require_ida_or_exit(flag_name: str, has_quick_fallback: bool = True) -> Non
 BANNER = r"""
 +============================================================+
 |                                                            |
-|   BYOVDsn1per   v2.8                                        |
+|   BYOVDsn1per   v2.9                                        |
 |   IDA-powered BYOVD specimen scanner (idalib headless)      |
-|   +scaled-index MJ writes  (unknown.sys 0->14/14 IOCTLs)    |
+|   +quickstart +ETA +explain +last-sweep +CSV +smart-paths   |
 |                                                            |
 +============================================================+
 """
@@ -3902,59 +3902,266 @@ def _list_crawler(out_dir: str) -> int:
     return 0
 
 
+def _print_quickstart() -> int:
+    print(C.CYAN + BANNER + C.RESET)
+    appdata = os.environ.get('APPDATA', '%APPDATA%')
+    print(f"{C.BOLD}Quickstart{C.RESET}")
+    print()
+    print(f"  1.  {C.BOLD}byovdsn1per --doctor{C.RESET}")
+    print(f"      check Python, IDA, signtool, paths")
+    print()
+    print(f"  2.  {C.BOLD}byovdsn1per --all driver.sys{C.RESET}     {C.DIM}# easy-mode single driver{C.RESET}")
+    print(f"      runs --deep + --poc + --strings + --yara-rule + --verify-load")
+    print()
+    print(f"  3.  {C.BOLD}byovdsn1per --crawl{C.RESET}              {C.DIM}# discover drivers across the system{C.RESET}")
+    print(f"      {C.BOLD}byovdsn1per --sweep --all{C.RESET}        {C.DIM}# analyze all of them{C.RESET}")
+    print()
+    print(f"  4.  {C.BOLD}byovdsn1per --last-sweep{C.RESET}         {C.DIM}# revisit the most recent sweep{C.RESET}")
+    print()
+    print(f"  {C.DIM}sweep results -> {appdata}\\BYOVDsn1per\\sweep_<timestamp>.json{C.RESET}")
+    print(f"  {C.DIM}crawler dir   -> {appdata}\\BYOVDsn1per\\crawler\\{C.RESET}")
+    print()
+    print(f"  Full flag list:           {C.BOLD}byovdsn1per --help{C.RESET}")
+    print(f"  Worked examples:          {C.BOLD}byovdsn1per --examples{C.RESET}")
+    return 0
+
+
+def _print_examples() -> int:
+    print(C.CYAN + BANNER + C.RESET)
+    print(USAGE_EPILOG.strip())
+    return 0
+
+
+def _resolve_driver_or_suggest(path_str: str):
+    p = Path(path_str.strip().strip('"').strip("'"))
+    if p.exists() and p.is_file():
+        return p, None
+    if p.is_dir():
+        return None, f"is a directory -- did you mean: {C.BOLD}byovdsn1per --sweep \"{p}\"{C.RESET}"
+    if not p.suffix:
+        guess = Path(str(p) + '.sys')
+        if guess.exists() and guess.is_file():
+            return guess, f"using {guess} (assumed .sys extension)"
+    parent = p.parent if p.parent.exists() else None
+    suggestions = []
+    if parent and parent.is_dir():
+        stem = p.stem.lower()[:4]
+        try:
+            for cand in sorted(parent.glob('*.sys')):
+                if stem and cand.name.lower().startswith(stem):
+                    suggestions.append(cand)
+                    if len(suggestions) >= 3:
+                        break
+        except OSError:
+            pass
+    if suggestions:
+        hint_lines = [f"did you mean: {C.BOLD}byovdsn1per \"{s}\"{C.RESET}" for s in suggestions]
+        return None, '\n  '.join(hint_lines)
+    return None, None
+
+
+def _format_eta(seconds_remaining: float) -> str:
+    sr = int(max(0, seconds_remaining))
+    if sr < 60: return f"{sr}s"
+    if sr < 3600: return f"{sr//60}m {sr%60:02d}s"
+    return f"{sr//3600}h {(sr%3600)//60:02d}m"
+
+
+def _score_breakdown(result: dict) -> list:
+    h = result.get('hvci', {}) or {}
+    prims = result.get('primitives', []) or []
+    ic = result.get('ioctl_count', 0) or 0
+    gates = (result.get('gate_status', '') or '').split('|') if result.get('gate_status') else []
+    modes = result.get('modes_resolved', []) or []
+    archs = result.get('archetype_strings') or {}
+    signals = []
+    if ic >= 30:
+        signals.append(('IOCTL count', f'+25  ({ic} IOCTLs, very rich surface)'))
+    elif ic >= 10:
+        signals.append(('IOCTL count', f'+20  ({ic} IOCTLs, rich surface)'))
+    elif ic >= 5:
+        signals.append(('IOCTL count', f'+15  ({ic} IOCTLs, moderate surface)'))
+    elif ic >= 3:
+        signals.append(('IOCTL count', f'+10  ({ic} IOCTLs, small surface)'))
+    else:
+        signals.append(('IOCTL count', f'+0   ({ic} IOCTLs)'))
+    prim_pts = min(40, 5 * len(prims))
+    signals.append(('Primitives',
+                    f'+{prim_pts} ({len(prims)} class{"es" if len(prims) != 1 else ""}: {", ".join(prims[:6]) if prims else "none"})'))
+    hard_gates = {'PID_CHECK', 'MODULE_PRESENCE', 'MAGIC_COOKIE',
+                  'TRUST_DB_NULL', 'STRING_COMPARE', 'TOKEN_CHECK'}
+    weak_gates = {'WEAK_BITNESS_CHECK_ONLY'}
+    detected_hard = set(gates) & hard_gates
+    if not gates or detected_hard - weak_gates == set():
+        signals.append(('Gate analysis', '+25 (no hard gates -- open dispatcher)'))
+    elif detected_hard:
+        signals.append(('Gate analysis', f'-{10 * len(detected_hard)} ({len(detected_hard)} hard gate(s): {", ".join(sorted(detected_hard))})'))
+    if result.get('has_io_create_device') and not result.get('has_io_create_device_secure'):
+        signals.append(('DACL signal', '+5  (IoCreateDevice without IoCreateDeviceSecure)'))
+    if result.get('sddl_strings'):
+        signals.append(('DACL signal', '-5  (SDDL strings present)'))
+    if archs:
+        bad = ['STEALTH_HIDDEN', 'ANTICHEAT_AC', 'SELF_PROTECTION']
+        hits = [a for a in bad if a in archs]
+        if hits:
+            signals.append(('Archetype penalty', f'-25 ({", ".join(hits)})'))
+    if 'minifilter' in modes and len(prims) >= 3:
+        signals.append(('Min-filter floor', '+0   (raised to 20 if score < 20)'))
+    cap_reasons = []
+    if not h.get('force_integrity'):
+        cap_reasons.append('FORCE_INTEGRITY off (cap 80)')
+    if not h.get('guard_cf') or h.get('init_wx'):
+        cap_reasons.append('GuardCF off or init-WX (cap 60)')
+    if cap_reasons:
+        signals.append(('Score cap', '   ' + '; '.join(cap_reasons)))
+    return signals
+
+
+def _last_sweep_path() -> Path:
+    base = Path(os.environ.get('APPDATA', '.')) / 'BYOVDsn1per'
+    if not base.is_dir():
+        return None
+    files = sorted(base.glob('sweep_*.json'), key=lambda p: p.stat().st_mtime, reverse=True)
+    return files[0] if files else None
+
+
+def _show_sweep_json(path: Path) -> int:
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except OSError as e:
+        print(f"{C.YELLOW}error reading {path}: {e}{C.RESET}", file=sys.stderr)
+        return 1
+    except json.JSONDecodeError as e:
+        print(f"{C.YELLOW}corrupt JSON at {path}: {e}{C.RESET}", file=sys.stderr)
+        return 1
+    if not isinstance(data, list):
+        print(f"{C.YELLOW}{path} doesn't look like a sweep result list{C.RESET}", file=sys.stderr)
+        return 1
+    print(f"{C.BOLD}{C.CYAN}{path}{C.RESET}")
+    print(f"  {len(data)} results")
+    print()
+    tier_counts = {}
+    for r in data:
+        t = r.get('_tier', '?')
+        tier_counts[t] = tier_counts.get(t, 0) + 1
+    for t in ('PERFECT', 'STRONG', 'INTERESTING', 'WEAK', 'SKIP'):
+        if t in tier_counts:
+            col = {'PERFECT': C.GREEN + C.BOLD, 'STRONG': C.GREEN, 'INTERESTING': C.YELLOW,
+                   'WEAK': C.DIM, 'SKIP': C.DIM}.get(t, '')
+            print(f"  {col}{t:<12} {tier_counts[t]:>4}{C.RESET}")
+    print()
+    top = sorted(data, key=lambda r: r.get('_score', 0), reverse=True)[:20]
+    print(f"  {C.BOLD}Top 20 by score:{C.RESET}")
+    for r in top:
+        name = os.path.basename(r.get('path') or r.get('driver') or '?')
+        sc = r.get('_score', 0)
+        tr = r.get('_tier', '?')
+        ic = r.get('ioctl_count', 0)
+        cves = r.get('cve_matches', []) or []
+        strong_cves = [m for m in cves if m.get('confidence') in ('CONFIRMED', 'HIGH', 'MEDIUM')]
+        cve_tag = f" cves={','.join(m['cve'] for m in strong_cves[:2])}" if strong_cves else ''
+        sig = (r.get('signing') or {}).get('SUBJECT', '?')
+        cn_m = re.search(r'CN=([^,]+)', sig)
+        cn = cn_m.group(1)[:32] if cn_m else '?'
+        col = {'PERFECT': C.GREEN + C.BOLD, 'STRONG': C.GREEN, 'INTERESTING': C.YELLOW,
+               'WEAK': C.DIM, 'SKIP': C.DIM}.get(tr, '')
+        print(f"    {col}{tr:<11} {sc:>3}/100{C.RESET}  IOCTLs={ic:<4}  {name[:42]:<42}  CN={cn[:30]}{cve_tag}")
+    print()
+    print(f"  {C.DIM}re-run filtered: byovdsn1per --sweep --filter perfect{C.RESET}")
+    return 0
+
+
+def _csv_dump(results: list) -> str:
+    import csv, io
+    out = io.StringIO()
+    w = csv.writer(out)
+    w.writerow(['path', 'tier', 'score', 'ioctl_count', 'modes', 'gate_status',
+                'signer_cn', 'thumbprint', 'sha256', 'imphash', 'hvci_pass',
+                'cve_matches', 'analyze_time_s'])
+    for r in results:
+        sig = (r.get('signing') or {})
+        subj = sig.get('SUBJECT', '')
+        cn_m = re.search(r'CN=([^,]+)', subj)
+        cn = cn_m.group(1).strip() if cn_m else ''
+        cves = r.get('cve_matches', []) or []
+        strong = [m for m in cves if m.get('confidence') in ('CONFIRMED', 'HIGH', 'MEDIUM')]
+        cve_str = ';'.join(f"{m['cve']}({m['confidence'][0]})" for m in strong)
+        h = r.get('hvci', {}) or {}
+        hvci_pass = bool(h.get('force_integrity')) and bool(h.get('guard_cf')) and not bool(h.get('init_wx'))
+        w.writerow([
+            r.get('path') or r.get('driver') or '',
+            r.get('_tier', ''),
+            r.get('_score', 0),
+            r.get('ioctl_count', 0),
+            ','.join(r.get('modes_resolved', []) or []),
+            r.get('gate_status', '') or '',
+            cn,
+            sig.get('THUMB', ''),
+            (r.get('hashes') or {}).get('sha256', ''),
+            (r.get('pe_extended') or {}).get('imphash', ''),
+            'yes' if hvci_pass else 'no',
+            cve_str,
+            f"{r.get('analyze_time_s', 0):.2f}",
+        ])
+    return out.getvalue()
+
+
+VERSION = 'v2.9'
+
 USAGE_EPILOG = r"""
 examples:
-  Single driver (full scan):
-    BYOVDsn1per driver.sys
+  First-time setup (always safe):
+    byovdsn1per --doctor                       # check Python + idalib + signing tools
 
-  Quick triage (no IDA):
-    BYOVDsn1per --quick driver.sys
-    BYOVDsn1per --hvci-only driver.sys
-    BYOVDsn1per --sign-verify driver.sys
+  Recommended one-shot (single driver):
+    byovdsn1per --all driver.sys               # deep scan + CVE match + strings + YARA + signtool
 
-  Deep analysis (per-IOCTL classification):
-    BYOVDsn1per --deep driver.sys
+  No IDA installed:
+    byovdsn1per --quick driver.sys             # PE+HVCI+signing, no dispatcher walk
 
-  CVE matcher (SAFE - no exploitation):
-    BYOVDsn1per --poc driver.sys
-    BYOVDsn1per --cve-list
+  End-to-end pipeline (crawl then sweep):
+    byovdsn1per --crawl                        # populate %APPDATA%\BYOVDsn1per\crawler\
+    byovdsn1per --sweep --all                  # full enrichment on every driver
 
-  String extraction + YARA rule:
-    BYOVDsn1per --strings --yara-rule driver.sys
-    BYOVDsn1per --yara-rule --yara-out rule.yar driver.sys
+  Inspect / replay:
+    byovdsn1per --list                         # what's in the crawler dir
+    byovdsn1per --last-sweep                   # re-display the most recent sweep
+    byovdsn1per --show <FILE.json>             # any prior sweep JSON
 
   Compare two drivers:
-    BYOVDsn1per --diff a.sys b.sys
+    byovdsn1per --diff a.sys b.sys
 
-  Bulk sweep:
-    BYOVDsn1per --sweep                  # default: %APPDATA%\BYOVDsn1per\crawler\
-    BYOVDsn1per --sweep --filter perfect
-    BYOVDsn1per --sweep D:\my_drivers    # custom dir
+  Focused triage:
+    byovdsn1per --hvci-only driver.sys         # HVCI flag verdict
+    byovdsn1per --sign-verify driver.sys       # signtool /kp /v
+    byovdsn1per --hashes-only driver.sys       # MD5/SHA1/SHA256/imphash
+    byovdsn1per --cve-list                     # print all 30 CVEs in the database
 
   System-wide discovery:
-    BYOVDsn1per --crawl                  # 33 known driver paths
-    BYOVDsn1per --deepcrawl              # every logical drive (A:..Z:)
-    BYOVDsn1per --restart                # wipe checkpoint + deepcrawl
-    BYOVDsn1per --list-default-roots     # show the 33 paths
+    byovdsn1per --crawl                        # 33 known driver paths
+    byovdsn1per --deepcrawl                    # every logical drive (A:..Z:)
+    byovdsn1per --restart                      # wipe checkpoint + deepcrawl
 
-  End-to-end pipeline:
-    BYOVDsn1per --crawl                  # 1. discover  (results -> %APPDATA%\BYOVDsn1per\crawler\)
-    BYOVDsn1per --sweep --poc            # 2. analyze + match CVEs
+  Verbose flag list:                           byovdsn1per --help
+  Worked examples:                             byovdsn1per --examples
 """
 
 def main():
     p = argparse.ArgumentParser(
         prog='BYOVDsn1per',
-        description='BYOVD specimen scanner (IDA-powered). v2.5 - IDA Pro Essential 9.3 headless via idalib.',
+        description=f'BYOVD specimen scanner (IDA-powered). {VERSION} - IDA Pro Essential 9.3 headless via idalib.',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=USAGE_EPILOG,
     )
     p.add_argument('driver', nargs='?', help='path to driver .sys')
-    p.add_argument('--version', '-V', action='version', version='BYOVDsn1per v2.8')
+    p.add_argument('--version', '-V', action='version', version=f'BYOVDsn1per {VERSION}')
 
     mode = p.add_argument_group('Scan modes (mutually exclusive on a single driver)')
-    mode.add_argument('--quick', action='store_true', help='HVCI+sign only (no IDA)')
-    mode.add_argument('--deep', action='store_true', help='full scan + per-IOCTL classification')
+    mode.add_argument('--all', action='store_true',
+                      help='(recommended one-shot) deep scan + CVE match + strings + YARA + signtool verify')
+    mode.add_argument('--quick', action='store_true', help='HVCI + signing + PE info only (no IDA needed)')
+    mode.add_argument('--deep', action='store_true', help='full scan + per-IOCTL primitive classification')
     mode.add_argument('--sweep', metavar='DIR', nargs='?',
                       const=os.path.join(os.environ.get('APPDATA', '.'),
                                          'BYOVDsn1per', 'crawler'),
@@ -3994,17 +4201,23 @@ def main():
     shortcut = p.add_argument_group('Standalone shortcuts (single driver, no full scan)')
     shortcut.add_argument('--doctor', action='store_true',
                           help='verify install: Python version, idalib, signtool/PowerShell, paths, crawler dir')
+    shortcut.add_argument('--examples', action='store_true',
+                          help='print the worked examples block and exit (same as the --help epilog)')
     shortcut.add_argument('--list', action='store_true',
                           help='list what is in the crawler dir (count, size, top signers) and exit')
+    shortcut.add_argument('--last-sweep', action='store_true',
+                          help='re-display the most recent sweep JSON without re-scanning')
+    shortcut.add_argument('--show', metavar='FILE',
+                          help='re-display a saved sweep JSON file (e.g. from %%APPDATA%%\\BYOVDsn1per\\)')
     shortcut.add_argument('--hvci-only', action='store_true', help='print HVCI flag verdict and exit')
     shortcut.add_argument('--sign-verify', action='store_true', help='run signtool /kp /v and exit')
     shortcut.add_argument('--hashes-only', action='store_true', help='print MD5/SHA1/SHA256/imphash and exit')
     shortcut.add_argument('--imports-only', action='store_true', help='dump PE imports table and exit')
     shortcut.add_argument('--cve-list', action='store_true', help='list all CVEs in the matcher database and exit')
+    shortcut.add_argument('--explain', action='store_true',
+                          help='after the main verdict, show a signal-by-signal score breakdown')
 
     addon = p.add_argument_group('Per-driver add-ons (combine with main scan)')
-    addon.add_argument('--all', action='store_true',
-                       help='everything: --deep + --poc + --strings + --yara-rule + --verify-load')
     addon.add_argument('--poc', action='store_true',
                        help='SAFE CVE matcher: which known CVEs target this driver (no exploitation)')
     addon.add_argument('--strings', action='store_true',
@@ -4031,7 +4244,7 @@ def main():
                         help='no subprocess calls (skip PowerShell/signtool); PE-only')
 
     output = p.add_argument_group('Output')
-    output.add_argument('--output', choices=['table', 'json', 'markdown'], default='table',
+    output.add_argument('--output', choices=['table', 'json', 'markdown', 'csv'], default='table',
                         help='output format (default: table)')
     output.add_argument('--json-out', metavar='FILE', help='also write JSON result to FILE')
     output.add_argument('--quiet', '-q', action='store_true',
@@ -4040,6 +4253,11 @@ def main():
                         help='dump everything: full IOCTL list, all sections, all imports, copy paths in crawl')
     output.add_argument('--no-color', action='store_true', help='disable ANSI colors')
     output.add_argument('--no-banner', action='store_true', help='suppress banner art')
+
+    if len(sys.argv) == 1:
+        if os.environ.get('NO_COLOR') or not sys.stdout.isatty():
+            C.disable()
+        return _print_quickstart()
 
     args = p.parse_args()
 
@@ -4050,7 +4268,7 @@ def main():
         args.yara_rule = True
         args.verify_load = True
 
-    if args.no_color or not sys.stdout.isatty():
+    if args.no_color or os.environ.get('NO_COLOR') or not sys.stdout.isatty():
         C.disable()
                                                                              
     try:
@@ -4075,8 +4293,23 @@ def main():
         return 0
     if args.doctor:
         return _doctor()
+    if args.examples:
+        return _print_examples()
     if getattr(args, 'list', False):
         return _list_crawler(args.crawl_out)
+    if args.last_sweep:
+        p_last = _last_sweep_path()
+        if not p_last:
+            print(f"{C.YELLOW}no sweep results found in %APPDATA%\\BYOVDsn1per\\{C.RESET}", file=sys.stderr)
+            print(f"  hint: run {C.BOLD}byovdsn1per --sweep{C.RESET} first", file=sys.stderr)
+            return 1
+        return _show_sweep_json(p_last)
+    if args.show:
+        sp = Path(args.show)
+        if not sp.exists():
+            print(f"{C.YELLOW}file not found: {sp}{C.RESET}", file=sys.stderr)
+            return 1
+        return _show_sweep_json(sp)
     if args.crawl or args.deepcrawl:
         roots = list(args.crawl_path)
         if args.deepcrawl:
@@ -4166,11 +4399,18 @@ def main():
     if args.diff:
         if not args.quick:
             _require_ida_or_exit('--diff (without --quick)', has_quick_fallback=True)
-        d1, d2 = Path(args.diff[0]), Path(args.diff[1])
-        for d in (d1, d2):
-            if not d.exists():
-                print(f"error: --diff driver not found: {d}")
+        resolved = []
+        for raw in args.diff:
+            d, hint = _resolve_driver_or_suggest(raw)
+            if d is None:
+                print(f"error: --diff driver not found: {raw}", file=sys.stderr)
+                if hint:
+                    print(f"  {hint}", file=sys.stderr)
                 return 1
+            if hint:
+                print(f"[BYOVDsn1per] {hint}")
+            resolved.append(d)
+        d1, d2 = resolved
         scans = []
         for d in (d1, d2):
             print(f"[BYOVDsn1per] scanning {d.name}...", flush=True)
@@ -4234,9 +4474,22 @@ def main():
         if not args.quick:
             _require_ida_or_exit('--sweep (without --quick)', has_quick_fallback=True)
         sweep_dir = Path(args.sweep)
+        if not sweep_dir.exists():
+            print(f"error: --sweep dir does not exist: {sweep_dir}", file=sys.stderr)
+            print(f"  hint: {C.BOLD}byovdsn1per --crawl{C.RESET}              (populate the default dir first)", file=sys.stderr)
+            print(f"  hint: {C.BOLD}byovdsn1per --list-default-roots{C.RESET}  (see where crawl looks)", file=sys.stderr)
+            return 1
+        if not sweep_dir.is_dir():
+            print(f"error: --sweep needs a directory, got file: {sweep_dir}", file=sys.stderr)
+            print(f"  hint: scan a single file with {C.BOLD}byovdsn1per \"{sweep_dir}\"{C.RESET}", file=sys.stderr)
+            return 1
         bins = sorted(sweep_dir.glob('*.sys'))
         cap = int(args.size_cap * 1024 * 1024)
         bins = [b for b in bins if b.stat().st_size <= cap]
+        if not bins:
+            print(f"{C.YELLOW}no .sys files in {sweep_dir} (cap {args.size_cap} MB){C.RESET}", file=sys.stderr)
+            print(f"  hint: {C.BOLD}byovdsn1per --crawl{C.RESET}  to populate it", file=sys.stderr)
+            return 1
         print(f"[BYOVDsn1per] sweeping {len(bins)} drivers (cap {args.size_cap} MB)")
 
         if args.json_out:
@@ -4269,8 +4522,14 @@ def main():
         import atexit
         atexit.register(_flush_results)
 
+        sweep_start = time.time()
+        recent_times = deque(maxlen=20)
+        print(f"[BYOVDsn1per] started at {time.strftime('%H:%M:%S')}")
+        print()
+
         try:
             for i, b in enumerate(bins, 1):
+                t_drv = time.time()
                 print(f"  [{i}/{len(bins)}] {b.name[:40]}...", end='', flush=True)
                 if args.quick:
                     r = quick_scan(str(b), offline=args.offline_mode)
@@ -4293,7 +4552,13 @@ def main():
                     r['strings'] = s
                 if args.yara_rule:
                     r['yara_rule'] = emit_yara_rule(r)
-                print(f" {tr} ({sc}) t={r.get('analyze_time_s',0):.1f}s", end='')
+                dt_drv = time.time() - t_drv
+                recent_times.append(dt_drv)
+                eta_str = ''
+                if recent_times and i < len(bins):
+                    avg = sum(recent_times) / len(recent_times)
+                    eta_str = f" eta={_format_eta(avg * (len(bins) - i))}"
+                print(f" {tr} ({sc}) t={r.get('analyze_time_s',0):.1f}s{eta_str}", end='')
                 if args.poc and r.get('cve_matches'):
                     strong = [m for m in r['cve_matches']
                               if m.get('confidence') in ('CONFIRMED', 'HIGH', 'MEDIUM')]
@@ -4334,6 +4599,8 @@ def main():
             for r in results:
                 print(fmt_markdown(r))
                 print()
+        elif args.output == 'csv':
+            print(_csv_dump(results), end='')
         elif not interrupted:
             for r in results:
                 print(fmt_table(r, verify=r.get('verify_load')))
@@ -4343,12 +4610,18 @@ def main():
     if not args.driver:
         p.print_help()
         return 1
-    drv = Path(args.driver)
-    if not drv.exists():
-        print(f"error: driver not found: {args.driver}")
+    drv, hint = _resolve_driver_or_suggest(args.driver)
+    if drv is None:
+        print(f"error: driver not found: {args.driver}", file=sys.stderr)
+        if hint:
+            print(f"  {hint}", file=sys.stderr)
         return 1
+    if hint:
+        print(f"[BYOVDsn1per] {hint}")
     if drv.stat().st_size > int(args.size_cap * 1024 * 1024):
-        print(f"error: driver exceeds --size-cap ({args.size_cap} MB). Use a larger cap to scan.")
+        actual_mb = drv.stat().st_size / 1024 / 1024
+        print(f"error: driver is {actual_mb:.1f} MB, exceeds --size-cap ({args.size_cap} MB)", file=sys.stderr)
+        print(f"  hint: {C.BOLD}byovdsn1per --size-cap {actual_mb + 0.5:.1f} \"{drv}\"{C.RESET}", file=sys.stderr)
         return 1
     if args.hvci_only:
         r = quick_scan(str(drv), offline=args.offline_mode)
@@ -4438,6 +4711,12 @@ def main():
         print(fmt_markdown(r))
     else:
         print(fmt_table(r, verify=r.get('verify_load'), verbose=args.verbose))
+        if args.explain:
+            print()
+            print(f"  {C.BOLD}Score breakdown:{C.RESET}")
+            for label, line in _score_breakdown(r):
+                print(f"    {label:<20} {line}")
+            print()
         if r.get('cve_matches'):
             _print_cve_matches(r['cve_matches'])
                                                        
