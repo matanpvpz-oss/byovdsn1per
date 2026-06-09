@@ -3661,8 +3661,9 @@ examples:
     BYOVDsn1per --diff a.sys b.sys
 
   Bulk sweep:
-    BYOVDsn1per --sweep crawler/
-    BYOVDsn1per --sweep crawler/ --filter perfect
+    BYOVDsn1per --sweep                  # default: %USERPROFILE%\BYOVDsn1per\crawler\
+    BYOVDsn1per --sweep --filter perfect
+    BYOVDsn1per --sweep D:\my_drivers    # custom dir
 
   System-wide discovery:
     BYOVDsn1per --crawl                  # 33 known driver paths
@@ -3671,8 +3672,8 @@ examples:
     BYOVDsn1per --list-default-roots     # show the 33 paths
 
   End-to-end pipeline:
-    BYOVDsn1per --crawl                  # 1. discover
-    BYOVDsn1per --sweep crawler/ --poc   # 2. analyze + match CVEs
+    BYOVDsn1per --crawl                  # 1. discover  (results -> %USERPROFILE%\BYOVDsn1per\crawler\)
+    BYOVDsn1per --sweep --poc            # 2. analyze + match CVEs
 """
 
 def main():
@@ -3688,7 +3689,12 @@ def main():
     mode = p.add_argument_group('Scan modes (mutually exclusive on a single driver)')
     mode.add_argument('--quick', action='store_true', help='HVCI+sign only (no IDA)')
     mode.add_argument('--deep', action='store_true', help='full scan + per-IOCTL classification')
-    mode.add_argument('--sweep', metavar='DIR', help='analyze every .sys in DIR')
+    mode.add_argument('--sweep', metavar='DIR', nargs='?',
+                      const=os.path.join(os.environ.get('USERPROFILE', '.'),
+                                         'BYOVDsn1per', 'crawler'),
+                      help='analyze every .sys in DIR. Without an argument, '
+                           'defaults to %%USERPROFILE%%\\BYOVDsn1per\\crawler\\ '
+                           '(the --crawl output dir).')
     mode.add_argument('--diff', nargs=2, metavar=('DRV1', 'DRV2'),
                       help='compare two drivers side-by-side and exit')
     mode.add_argument('--decompile', metavar='DRIVER',

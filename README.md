@@ -82,11 +82,13 @@ byovdsn1per --yara-rule --yara-out rule.yar driver.sys
 byovdsn1per --diff a.sys b.sys
 ```
 
-Sweep a folder:
+Sweep a folder. With no argument, `--sweep` analyses the `--crawl` output dir (`%USERPROFILE%\BYOVDsn1per\crawler\`):
 
 ```bash
-byovdsn1per --sweep drivers/
-byovdsn1per --sweep drivers/ --filter perfect
+byovdsn1per --sweep                       # the crawler output dir
+byovdsn1per --sweep D:\my_drivers          # any folder you like
+byovdsn1per --sweep --filter perfect       # only PERFECT/STRONG tier
+byovdsn1per --sweep --poc                  # add CVE matching
 ```
 
 ## Crawl
@@ -105,9 +107,9 @@ The driver filter is intentionally minimal. It accepts anything with `subsystem 
 ## End-to-end
 
 ```bash
-byovdsn1per --crawl
-byovdsn1per --sweep %USERPROFILE%\BYOVDsn1per\crawler --poc
-byovdsn1per --sweep %USERPROFILE%\BYOVDsn1per\crawler --filter perfect
+byovdsn1per --crawl                       # 1. discover. Results land in %USERPROFILE%\BYOVDsn1per\crawler\
+byovdsn1per --sweep --poc                 # 2. analyze + match CVEs (uses the crawler dir by default)
+byovdsn1per --sweep --filter perfect      # 3. only show PERFECT / STRONG tier
 ```
 
 ## Output formats
