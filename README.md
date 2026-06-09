@@ -24,6 +24,8 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 
 Copies the script to `%LOCALAPPDATA%\Programs\BYOVDsn1per\` and adds it to your user PATH. No admin needed. Open a new terminal and `byovdsn1per --version` should print v2.5.
 
+After install, run `byovdsn1per --doctor` to confirm Python, idalib, and the Windows signing tools are reachable from PATH. It also shows where the default crawl output dir resolves on your machine.
+
 Uninstall: `.\install.ps1 -Uninstall`.
 
 If you'd rather not install, the script runs in place. Call `python BYOVDsn1per.py`, or use `BYOVDsn1per.cmd` from the repo folder. The launcher tries `python` first, then `py -3`.
@@ -72,6 +74,13 @@ CVE matcher:
 ```bash
 byovdsn1per --poc driver.sys
 byovdsn1per --cve-list
+```
+
+Inspect what you've already harvested:
+
+```bash
+byovdsn1per --list                        # count, total size, top-10 by size
+byovdsn1per --doctor                      # verify install + show resolved paths
 ```
 
 Strings, YARA, diff:

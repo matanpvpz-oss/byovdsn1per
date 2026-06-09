@@ -3636,6 +3636,105 @@ def full_scan(driver_path: str, depth: int, no_flirt: bool, deep: bool, no_decom
         r['verify_load'] = signtool_kp(driver_path)
     return r
 
+def _doctor() -> int:
+    py_ver = '.'.join(str(v) for v in sys.version_info[:3])
+    py_ok = sys.version_info >= (3, 10)
+    print(f"{C.BOLD}BYOVDsn1per doctor{C.RESET}")
+    print()
+    print(f"{C.BOLD}Python{C.RESET}")
+    print(f"  version:  {C.GREEN if py_ok else C.YELLOW}{py_ver}{C.RESET}  ({sys.executable})")
+    if not py_ok:
+        print(f"  {C.YELLOW}needs 3.10 or newer{C.RESET}")
+    print()
+    print(f"{C.BOLD}idalib (IDA Pro headless){C.RESET}")
+    try:
+        import idapro as _idapro
+        idapath = getattr(_idapro, '__file__', '?')
+        print(f"  {C.GREEN}import idapro: OK{C.RESET}  ({idapath})")
+        print(f"  {C.GREEN}full/deep/sweep modes available{C.RESET}")
+    except Exception as e:
+        print(f"  {C.YELLOW}import idapro: FAIL{C.RESET}  ({type(e).__name__}: {e})")
+        print(f"  {C.DIM}only --quick / --crawl / --diff / --hashes-only modes will work{C.RESET}")
+    print()
+    print(f"{C.BOLD}Windows signing tools{C.RESET}")
+    if os.name != 'nt':
+        print(f"  {C.YELLOW}not on Windows -- signing verification skipped{C.RESET}")
+    else:
+        ps = shutil.which('powershell.exe') or shutil.which('powershell')
+        st = shutil.which('signtool.exe') or shutil.which('signtool')
+        print(f"  powershell: {C.GREEN+'OK' if ps else C.YELLOW+'missing'}{C.RESET}  ({ps or '-'})")
+        print(f"  signtool:   {C.GREEN+'OK' if st else C.YELLOW+'missing'}{C.RESET}  ({st or '-'})")
+        if not st:
+            print(f"  {C.DIM}signtool ships with the Windows SDK; --sign-verify and --verify-load need it{C.RESET}")
+    print()
+    print(f"{C.BOLD}Paths{C.RESET}")
+    default_out = os.path.join(os.environ.get('APPDATA', '.'), 'BYOVDsn1per', 'crawler')
+    print(f"  default --crawl-out: {default_out}")
+    ckpt = os.path.join(default_out, CHECKPOINT_FILENAME)
+    cache = os.path.join(default_out, SHA256_CACHE_FILENAME)
+    exists = os.path.isdir(default_out)
+    print(f"  exists: {C.GREEN+'yes' if exists else C.YELLOW+'no (will be created on first --crawl)'}{C.RESET}")
+    if exists:
+        try:
+            sys_files = list(Path(default_out).glob('*.sys'))
+            total = sum(f.stat().st_size for f in sys_files)
+            print(f"  drivers: {C.GREEN}{len(sys_files)}{C.RESET}  ({total/1024/1024:.1f} MB total)")
+            print(f"  checkpoint file: {'present' if os.path.isfile(ckpt) else 'missing'}")
+            print(f"  sha256 cache:    {'present' if os.path.isfile(cache) else 'missing'}")
+        except OSError as e:
+            print(f"  {C.YELLOW}error reading dir: {e}{C.RESET}")
+    print()
+    print(f"{C.BOLD}Environment{C.RESET}")
+    for var in ('APPDATA', 'LOCALAPPDATA', 'USERPROFILE', 'TEMP'):
+        print(f"  %{var}%: {os.environ.get(var, '(unset)')}")
+    return 0
+
+
+def _list_crawler(out_dir: str) -> int:
+    out = Path(out_dir)
+    if not out.is_dir():
+        print(f"{C.YELLOW}crawler dir does not exist: {out}{C.RESET}")
+        print(f"  run {C.BOLD}byovdsn1per --crawl{C.RESET} to populate it")
+        return 1
+    drivers = sorted(out.glob('*.sys'))
+    if not drivers:
+        print(f"{C.YELLOW}no drivers in {out}{C.RESET}")
+        print(f"  run {C.BOLD}byovdsn1per --crawl{C.RESET} to populate it")
+        return 0
+    total_bytes = 0
+    by_size_top = []
+    for d in drivers:
+        try:
+            sz = d.stat().st_size
+            total_bytes += sz
+            by_size_top.append((sz, d.name))
+        except OSError:
+            pass
+    by_size_top.sort(reverse=True)
+    ckpt = out / CHECKPOINT_FILENAME
+    cache = out / SHA256_CACHE_FILENAME
+    n_ckpt = 0
+    if ckpt.is_file():
+        try:
+            with open(ckpt, 'r', encoding='utf-8', errors='replace') as f:
+                n_ckpt = sum(1 for ln in f if ln.strip())
+        except OSError:
+            pass
+    print(f"{C.BOLD}{C.CYAN}{out}{C.RESET}")
+    print()
+    print(f"  drivers:   {C.GREEN}{C.BOLD}{len(drivers)}{C.RESET}")
+    print(f"  total:     {total_bytes/1024/1024:.1f} MB")
+    print(f"  avg size:  {total_bytes/max(1, len(drivers))/1024:.1f} KB")
+    print(f"  checkpoint: {n_ckpt} dirs recorded")
+    print()
+    print(f"  {C.BOLD}largest 10 drivers:{C.RESET}")
+    for sz, nm in by_size_top[:10]:
+        print(f"    {sz/1024:>8.1f} KB  {nm}")
+    print()
+    print(f"  {C.DIM}sweep them: {C.BOLD}byovdsn1per --sweep --poc{C.RESET}")
+    return 0
+
+
 USAGE_EPILOG = r"""
 examples:
   Single driver (full scan):
@@ -3726,6 +3825,10 @@ def main():
                        help='print the default crawl roots and exit')
 
     shortcut = p.add_argument_group('Standalone shortcuts (single driver, no full scan)')
+    shortcut.add_argument('--doctor', action='store_true',
+                          help='verify install: Python version, idalib, signtool/PowerShell, paths, crawler dir')
+    shortcut.add_argument('--list', action='store_true',
+                          help='list what is in the crawler dir (count, size, top signers) and exit')
     shortcut.add_argument('--hvci-only', action='store_true', help='print HVCI flag verdict and exit')
     shortcut.add_argument('--sign-verify', action='store_true', help='run signtool /kp /v and exit')
     shortcut.add_argument('--hashes-only', action='store_true', help='print MD5/SHA1/SHA256/imphash and exit')
@@ -3794,6 +3897,10 @@ def main():
             col = C.GREEN if mark == '+' else C.DIM
             print(f"  {col}{mark} {r}{C.RESET}")
         return 0
+    if args.doctor:
+        return _doctor()
+    if getattr(args, 'list', False):
+        return _list_crawler(args.crawl_out)
     if args.crawl or args.deepcrawl:
         roots = list(args.crawl_path)
         if args.deepcrawl:
@@ -3861,6 +3968,21 @@ def main():
             print(f"{C.YELLOW}=> 0 drivers found in {len(stats['roots_walked'])} root(s).{C.RESET}")
         if not args.crawl_no_checkpoint and stats['copied'] == 0 and stats['dirs_skipped'] > 0:
             print(f"  {C.DIM}checkpoint at {abs_out}\\.scanned_paths.txt{C.RESET}")
+
+        try:
+            existing = len(list(Path(out).glob('*.sys'))) if os.path.isdir(out) else 0
+        except OSError:
+            existing = 0
+        if existing > 0:
+            default_out_norm = os.path.normpath(os.path.join(
+                os.environ.get('APPDATA', '.'), 'BYOVDsn1per', 'crawler'))
+            uses_default = os.path.normpath(out) == default_out_norm
+            sweep_arg = '' if uses_default else f' "{abs_out}"'
+            print()
+            print(f"{C.CYAN}{C.BOLD}Next:{C.RESET}")
+            print(f"  {C.BOLD}byovdsn1per --sweep{sweep_arg} --poc{C.RESET}        analyze + match CVE database")
+            print(f"  {C.BOLD}byovdsn1per --sweep{sweep_arg} --filter perfect{C.RESET}   PERFECT/STRONG tier only")
+            print(f"  {C.BOLD}byovdsn1per --list{C.RESET}                          show what's in the crawler dir")
         if args.json_out:
             Path(args.json_out).write_text(json.dumps(stats, indent=2, default=str))
         return 0
