@@ -3487,10 +3487,16 @@ def perfect_score(result: dict) -> tuple:
     elif len(exports) >= 10 and ic == 0:
         score -= 10
 
+    sig_subject = ((result.get('signing') or {}).get('SUBJECT') or '').upper()
+    ms_inbox_signed = ('CN=MICROSOFT WINDOWS,' in sig_subject
+                       or sig_subject.startswith('CN=MICROSOFT WINDOWS,'))
+    if ms_inbox_signed and ic == 0:
+        score -= 25
+
     dispatcher_modes = {'legacy_mj14', 'mj14_recursive', 'wdf_static',
                         'wdf_stub_inferred', 'minifilter'}
     has_dispatcher = bool(set(modes) & dispatcher_modes)
-    if has_dispatcher and ic == 0 and len(prims) >= 3 and score < 30:
+    if has_dispatcher and ic == 0 and len(prims) >= 3 and score < 30 and not ms_inbox_signed:
         score = 30
 
     if (h.get('force_integrity') and h.get('guard_cf') and not h.get('init_wx')
@@ -4110,7 +4116,7 @@ def _csv_dump(results: list) -> str:
     return out.getvalue()
 
 
-VERSION = 'v2.9.4'
+VERSION = 'v2.9.5'
 
 USAGE_EPILOG = r"""
 examples:
