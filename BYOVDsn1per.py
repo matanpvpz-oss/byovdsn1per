@@ -25,15 +25,48 @@ IMAGE_DLLCHARACTERISTICS_GUARD_CF         = 0x4000
 IMAGE_SCN_MEM_EXECUTE               = 0x20000000
 IMAGE_SCN_MEM_WRITE                 = 0x80000000
 IMAGE_SUBSYSTEM_NATIVE              = 1                               
-DRIVER_OBJ_MJ_OFFSET_X64            = 0x70                                                
-DRIVER_OBJ_MJ_OFFSET_X86            = 0x38                                     
+DRIVER_OBJ_MJ_OFFSET_X64            = 0x70
+DRIVER_OBJ_MJ_OFFSET_X86            = 0x38
+
+_IDAPRO_AVAILABLE = None
+_IDAPRO_ERROR = None
+
+
+def _idapro_available() -> bool:
+    global _IDAPRO_AVAILABLE, _IDAPRO_ERROR
+    if _IDAPRO_AVAILABLE is not None:
+        return _IDAPRO_AVAILABLE
+    try:
+        import idapro
+        _IDAPRO_AVAILABLE = True
+    except Exception as e:
+        _IDAPRO_AVAILABLE = False
+        _IDAPRO_ERROR = f'{type(e).__name__}: {e}'
+    return _IDAPRO_AVAILABLE
+
+
+def _require_ida_or_exit(flag_name: str, has_quick_fallback: bool = True) -> None:
+    if _idapro_available():
+        return
+    msg = [
+        f"error: {flag_name} needs idalib (IDA Pro 9.x Essential+ Python bindings)",
+        f"       reason: {_IDAPRO_ERROR}",
+        f"       install: pip install idapro    (from your IDA install directory)",
+    ]
+    if has_quick_fallback:
+        msg.append(f"       or:      add --quick to skip IDA-based dispatcher analysis")
+    msg.append(f"       see also: byovdsn1per --doctor")
+    for line in msg:
+        print(line, file=sys.stderr)
+    sys.exit(2)
+
 
 BANNER = r"""
 +============================================================+
 |                                                            |
-|   BYOVDsn1per   v2.5                                        |
+|   BYOVDsn1per   v2.6                                        |
 |   IDA-powered BYOVD specimen scanner (idalib headless)      |
-|   +deep-jnz/setcc  +single-buf  +MS-reserved  +CVE-tighten  |
+|   +pre-flight  +no-IDA friendly errors  +--doctor hints    |
 |                                                            |
 +============================================================+
 """
@@ -3647,14 +3680,24 @@ def _doctor() -> int:
         print(f"  {C.YELLOW}needs 3.10 or newer{C.RESET}")
     print()
     print(f"{C.BOLD}idalib (IDA Pro headless){C.RESET}")
-    try:
-        import idapro as _idapro
-        idapath = getattr(_idapro, '__file__', '?')
+    if _idapro_available():
+        try:
+            import idapro as _idapro
+            idapath = getattr(_idapro, '__file__', '?')
+        except Exception:
+            idapath = '?'
         print(f"  {C.GREEN}import idapro: OK{C.RESET}  ({idapath})")
-        print(f"  {C.GREEN}full/deep/sweep modes available{C.RESET}")
-    except Exception as e:
-        print(f"  {C.YELLOW}import idapro: FAIL{C.RESET}  ({type(e).__name__}: {e})")
-        print(f"  {C.DIM}only --quick / --crawl / --diff / --hashes-only modes will work{C.RESET}")
+        print(f"  {C.GREEN}all modes available: --quick, full scan, --deep, --sweep, --diff, --decompile{C.RESET}")
+    else:
+        print(f"  {C.YELLOW}import idapro: FAIL{C.RESET}  ({_IDAPRO_ERROR})")
+        print(f"  {C.DIM}install: pip install idapro    (from your IDA install directory){C.RESET}")
+        print(f"  {C.DIM}IDA-free modes that still work:{C.RESET}")
+        print(f"  {C.DIM}    --quick, --hvci-only, --sign-verify, --hashes-only, --imports-only,{C.RESET}")
+        print(f"  {C.DIM}    --cve-list, --crawl, --deepcrawl, --restart, --list,{C.RESET}")
+        print(f"  {C.DIM}    --list-default-roots, --doctor{C.RESET}")
+        print(f"  {C.DIM}    --diff / --sweep ONLY when combined with --quick{C.RESET}")
+        print(f"  {C.DIM}    --strings / --yara-rule / --poc are modifiers; they work whenever the{C.RESET}")
+        print(f"  {C.DIM}      underlying scan does (so add --quick on a no-IDA box){C.RESET}")
     print()
     print(f"{C.BOLD}Windows signing tools{C.RESET}")
     if os.name != 'nt':
@@ -3783,7 +3826,7 @@ def main():
         epilog=USAGE_EPILOG,
     )
     p.add_argument('driver', nargs='?', help='path to driver .sys')
-    p.add_argument('--version', '-V', action='version', version='BYOVDsn1per v2.5')
+    p.add_argument('--version', '-V', action='version', version='BYOVDsn1per v2.6')
 
     mode = p.add_argument_group('Scan modes (mutually exclusive on a single driver)')
     mode.add_argument('--quick', action='store_true', help='HVCI+sign only (no IDA)')
@@ -3988,6 +4031,8 @@ def main():
         return 0
 
     if args.diff:
+        if not args.quick:
+            _require_ida_or_exit('--diff (without --quick)', has_quick_fallback=True)
         d1, d2 = Path(args.diff[0]), Path(args.diff[1])
         for d in (d1, d2):
             if not d.exists():
@@ -4029,6 +4074,7 @@ def main():
         if not args.ea:
             print("error: --decompile requires --ea ADDR")
             return 2
+        _require_ida_or_exit('--decompile', has_quick_fallback=False)
         ea = int(args.ea, 0)
         print(f"[BYOVDsn1per] decompile {args.decompile} @ {hex(ea)}")
         tmp = Path(tempfile.mkdtemp(prefix='snipr_'))
@@ -4052,6 +4098,8 @@ def main():
         return 0
 
     if args.sweep:
+        if not args.quick:
+            _require_ida_or_exit('--sweep (without --quick)', has_quick_fallback=True)
         sweep_dir = Path(args.sweep)
         bins = sorted(sweep_dir.glob('*.sys'))
         cap = int(args.size_cap * 1024 * 1024)
@@ -4151,6 +4199,8 @@ def main():
             for api in imp.get('apis', []):
                 print(f"    {api}")
         return 0
+    if not args.quick:
+        _require_ida_or_exit('full scan (default mode)', has_quick_fallback=True)
     if args.quick:
         r = quick_scan(str(drv), offline=args.offline_mode)
     else:

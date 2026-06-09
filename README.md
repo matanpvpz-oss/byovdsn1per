@@ -34,11 +34,44 @@ If you'd rather not install, the script runs in place. Call `python BYOVDsn1per.
 
 Python 3.10 or newer.
 
-For non-quick modes, you need IDA Pro Essential 9.3+ with the `idapro` Python package installed.
+For full IOCTL-dispatcher analysis you need IDA Pro Essential 9.3+ with the `idapro` Python package installed. The signing/HVCI path calls Windows-only tools: PowerShell's `Get-AuthenticodeSignature` and `signtool /kp`. The PE-info pipeline is pure-stdlib and works anywhere Python runs.
 
-Signing checks and HVCI flag extraction call Windows-only tools: PowerShell's `Get-AuthenticodeSignature` and `signtool /kp`. The PE-info pipeline is pure-stdlib and works anywhere Python runs.
+### What works without IDA
 
-What works without IDA: `--quick`, `--crawl`, `--deepcrawl`, `--diff`, `--hashes-only`, `--strings`, `--yara-rule`, `--cve-list`, `--list-default-roots`.
+These run silently on a no-IDA box:
+
+| Mode | Notes |
+|---|---|
+| `--quick DRIVER` | HVCI + signing + PE info + imports |
+| `--hvci-only`, `--sign-verify`, `--hashes-only`, `--imports-only` | single-fact lookups |
+| `--cve-list` | print the matcher database |
+| `--crawl`, `--deepcrawl`, `--restart` | filesystem walk + PE-header check, no disassembly |
+| `--list`, `--list-default-roots` | inspect crawler contents / show crawl roots |
+| `--doctor` | reports whether idalib was found, lists IDA-free modes |
+| `--sweep --quick`, `--diff --quick a b` | the `--quick` modifier skips IDA in those modes too |
+| `--strings`, `--yara-rule`, `--poc` | per-driver modifiers; they work whenever the underlying scan does |
+
+### What needs IDA
+
+These will block with a friendly error if idalib is missing, exit code 2:
+
+```
+error: full scan (default mode) needs idalib (IDA Pro 9.x Essential+ Python bindings)
+       reason: ModuleNotFoundError: No module named 'idapro'
+       install: pip install idapro    (from your IDA install directory)
+       or:      add --quick to skip IDA-based dispatcher analysis
+       see also: byovdsn1per --doctor
+```
+
+| Mode | Why |
+|---|---|
+| `DRIVER` (default full scan) | dispatcher walk needs IDA |
+| `--deep DRIVER` | per-IOCTL primitive classification |
+| `--sweep DIR` (no `--quick`) | per-driver full scan in a loop |
+| `--diff a b` (no `--quick`) | per-driver full scan |
+| `--decompile DRIVER --ea ADDR` | hexrays-decompile, no `--quick` fallback |
+
+Run `byovdsn1per --doctor` for an explicit yes/no on this machine.
 
 ## Where do crawl results go?
 
