@@ -64,9 +64,9 @@ def _require_ida_or_exit(flag_name: str, has_quick_fallback: bool = True) -> Non
 BANNER = r"""
 +============================================================+
 |                                                            |
-|   BYOVDsn1per   v2.7                                        |
+|   BYOVDsn1per   v2.8                                        |
 |   IDA-powered BYOVD specimen scanner (idalib headless)      |
-|   +strict-driver-verify  +--all  +kernel-import check       |
+|   +scaled-index MJ writes  (unknown.sys 0->14/14 IOCTLs)    |
 |                                                            |
 +============================================================+
 """
@@ -2762,18 +2762,22 @@ def _is_32bit_image():
 
 def _scan_mj_writes_recursive(start_func_ea, max_depth=3):
     import ida_funcs, ida_bytes, ida_ua, ida_idaapi
+    import idc
     is32 = _is_32bit_image()
-                                                         
+
     if is32:
         layouts = [(0x38, 4, 0x80)]
+        sib_stride = 4
     else:
         layouts = [(0x70, 8, 0x100)]
+        sib_stride = 8
 
     found = {}
-                                                                      
-    pending_repstos = []                               
+
+    pending_repstos = []
     visited = set()
     queue = deque([(start_func_ea, 0)])
+    sib_pattern = re.compile(r'\[\s*([a-z0-9]+)\s*\+\s*([a-z0-9]+)\s*\+', re.I)
     while queue:
         fea, d = queue.popleft()
         if fea in visited or d > max_depth:
@@ -2791,10 +2795,29 @@ def _scan_mj_writes_recursive(start_func_ea, max_depth=3):
             op0 = insn.ops[0]
             if mnem == 'mov' and op0.type == ida_ua.o_displ:
                 off = op0.addr
-                                 
+                op_str = idc.print_operand(ea, 0) or ''
+                sib_m = sib_pattern.search(op_str)
+                sib_mj_idx = None
+                if sib_m and off == (0x70 if not is32 else 0x38):
+                    index_reg_name = sib_m.group(2).lower()
+                    scan = ea
+                    for _ in range(20):
+                        scan = ida_bytes.prev_head(scan, f.start_ea)
+                        if scan < f.start_ea: break
+                        pi = ida_ua.insn_t()
+                        if not ida_ua.decode_insn(pi, scan): continue
+                        pmn = pi.get_canon_mnem()
+                        p_op0 = idc.print_operand(scan, 0).lower()
+                        if pmn == 'imul' and index_reg_name in p_op0:
+                            for k in (1, 2):
+                                if k < len(pi.ops) and pi.ops[k].type == ida_ua.o_imm:
+                                    sib_mj_idx = pi.ops[k].value
+                                    break
+                            break
+
                 for base, stride, max_off in layouts:
                     if base <= off <= max_off and (off - base) % stride == 0:
-                        mj_idx = (off - base) // stride
+                        mj_idx = sib_mj_idx if sib_mj_idx is not None else (off - base) // stride
                         op1 = insn.ops[1]
                         if op1.type == ida_ua.o_reg:
                             scan = ea
@@ -2810,10 +2833,9 @@ def _scan_mj_writes_recursive(start_func_ea, max_depth=3):
                                         and pi.ops[0].reg == op1.reg):
                                         handler = pi.ops[1].addr or pi.ops[1].value
                                         if handler and ida_funcs.get_func(handler):
-                                            if mj_idx not in found:
-                                                found[mj_idx] = handler
+                                            found[mj_idx] = handler
                                         break
-                        break                                         
+                        break
                                                                           
             expected_base = 0x38 if is32 else 0x70
             if mnem.startswith('stos'):
@@ -3928,7 +3950,7 @@ def main():
         epilog=USAGE_EPILOG,
     )
     p.add_argument('driver', nargs='?', help='path to driver .sys')
-    p.add_argument('--version', '-V', action='version', version='BYOVDsn1per v2.7')
+    p.add_argument('--version', '-V', action='version', version='BYOVDsn1per v2.8')
 
     mode = p.add_argument_group('Scan modes (mutually exclusive on a single driver)')
     mode.add_argument('--quick', action='store_true', help='HVCI+sign only (no IDA)')
