@@ -97,10 +97,13 @@ If you skipped the installer, replace `byovdsn1per` with `python BYOVDsn1per.py`
 Single driver:
 
 ```bash
-byovdsn1per driver.sys
-byovdsn1per --quick driver.sys
-byovdsn1per --deep driver.sys
+byovdsn1per driver.sys                  # default full scan
+byovdsn1per --quick driver.sys          # no IDA needed
+byovdsn1per --deep driver.sys           # per-IOCTL primitive classification
+byovdsn1per --all driver.sys            # --deep + --poc + --strings + --yara-rule + --verify-load
 ```
+
+`--all` is the kitchen-sink mode. Equivalent to listing those five flags by hand.
 
 CVE matcher:
 
@@ -144,7 +147,13 @@ byovdsn1per --crawl --crawl-out my_harvest --crawl-limit 100
 byovdsn1per --list-default-roots
 ```
 
-The driver filter is intentionally minimal. It accepts anything with `subsystem == NATIVE` and `AddressOfEntryPoint != 0`. A few WDF helpers and minifilter assist DLLs slip through. That's deliberate. Filter later in `--sweep`.
+The driver filter requires three things, in order:
+
+1. NATIVE subsystem PE (the only subsystem the kernel loads)
+2. AddressOfEntryPoint != 0 (i.e. there's an entry function, which for `.sys` files is `DriverEntry`)
+3. At least one import from a known kernel-mode module (ntoskrnl.exe, hal.dll, fltmgr.sys, ndis.sys, wdf01000.sys, ksecdd.sys, etc.)
+
+That third check is what separates "real kernel driver" from "happens to be PE32+ NATIVE with an entry point". Things like `cmd.exe` renamed to `.sys` get rejected. WDF helpers and minifilter assist DLLs (e.g. `ksapi64_del.sys`) still pass because they import from wdf01000.sys or fltmgr.sys.
 
 ## End-to-end
 

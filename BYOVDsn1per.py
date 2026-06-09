@@ -64,9 +64,9 @@ def _require_ida_or_exit(flag_name: str, has_quick_fallback: bool = True) -> Non
 BANNER = r"""
 +============================================================+
 |                                                            |
-|   BYOVDsn1per   v2.6                                        |
+|   BYOVDsn1per   v2.7                                        |
 |   IDA-powered BYOVD specimen scanner (idalib headless)      |
-|   +pre-flight  +no-IDA friendly errors  +--doctor hints    |
+|   +strict-driver-verify  +--all  +kernel-import check       |
 |                                                            |
 +============================================================+
 """
@@ -1861,13 +1861,118 @@ def _header_is_kernel_driver(header: bytes) -> bool:
         return False
     return subsys == 1 and aep != 0
 
+KERNEL_MODE_IMPORTS = frozenset([
+    'ntoskrnl.exe',
+    'hal.dll',
+    'ntdll.dll',
+    'wdmsec.sys',
+    'fltmgr.sys',
+    'ndis.sys',
+    'tcpip.sys',
+    'storport.sys',
+    'scsiport.sys',
+    'pci.sys',
+    'usbport.sys',
+    'usbhub.sys',
+    'classpnp.sys',
+    'win32k.sys',
+    'ks.sys',
+    'portcls.sys',
+    'bootvid.dll',
+    'msrpc.sys',
+    'tdi.sys',
+    'mountmgr.sys',
+    'verifier.dll',
+    'cng.sys',
+    'ksecdd.sys',
+    'wdf01000.sys',
+])
+
+
+def _has_kernel_imports(buf: bytes) -> bool:
+    if len(buf) < 0x200 or buf[:2] != b'MZ':
+        return False
+    try:
+        e_lfanew = struct.unpack_from('<I', buf, IMAGE_DOS_HEADER_E_LFANEW)[0]
+        if buf[e_lfanew:e_lfanew + 4] != b'PE\x00\x00':
+            return False
+        coff = e_lfanew + 4
+        num_sections = struct.unpack_from('<H', buf, coff + 2)[0]
+        opt_size = struct.unpack_from('<H', buf, coff + 16)[0]
+        opt_off = coff + 20
+        magic = struct.unpack_from('<H', buf, opt_off)[0]
+        if magic == IMAGE_OPTIONAL_HEADER_MAGIC_PE32:
+            dd_off = opt_off + 96
+        elif magic == IMAGE_OPTIONAL_HEADER_MAGIC_PE32P:
+            dd_off = opt_off + 112
+        else:
+            return False
+        imp_rva = struct.unpack_from('<I', buf, dd_off + 8)[0]
+        if imp_rva == 0:
+            return False
+        sec_off = opt_off + opt_size
+        if sec_off + num_sections * 40 > len(buf):
+            return False
+        sections = []
+        for i in range(num_sections):
+            s = sec_off + i * 40
+            sections.append((
+                struct.unpack_from('<I', buf, s + 12)[0],
+                struct.unpack_from('<I', buf, s + 8)[0],
+                struct.unpack_from('<I', buf, s + 20)[0],
+                struct.unpack_from('<I', buf, s + 16)[0],
+            ))
+
+        def rva2off(rva):
+            for va, vsize, praw, sraw in sections:
+                span = max(vsize, sraw)
+                if va <= rva < va + span:
+                    return praw + (rva - va)
+            return None
+
+        imp_off = rva2off(imp_rva)
+        if imp_off is None:
+            return False
+        i = 0
+        while i < 128:
+            d = imp_off + i * 20
+            if d + 20 > len(buf):
+                break
+            characteristics = struct.unpack_from('<I', buf, d)[0]
+            name_rva = struct.unpack_from('<I', buf, d + 12)[0]
+            if characteristics == 0 and name_rva == 0:
+                break
+            name_off = rva2off(name_rva)
+            if name_off is None or name_off >= len(buf):
+                i += 1
+                continue
+            end = buf.find(b'\x00', name_off, min(name_off + 256, len(buf)))
+            if end == -1:
+                i += 1
+                continue
+            try:
+                dll = buf[name_off:end].decode('ascii', errors='replace').lower().strip()
+            except Exception:
+                i += 1
+                continue
+            if dll in KERNEL_MODE_IMPORTS:
+                return True
+            i += 1
+        return False
+    except (struct.error, IndexError, ValueError):
+        return False
+
+
 def quick_is_kernel_driver(path: str) -> bool:
     try:
         with open(path, 'rb') as f:
-            header = f.read(0x400)
+            buf = f.read()
     except OSError:
         return False
-    return _header_is_kernel_driver(header)
+    if not _header_is_kernel_driver(buf):
+        return False
+    return _has_kernel_imports(buf)
+
 
 def quick_check_and_hash(path: str):
     try:
@@ -1875,14 +1980,11 @@ def quick_check_and_hash(path: str):
             header = f.read(0x400)
             if not _header_is_kernel_driver(header):
                 return (False, None)
-            h = hashlib.sha256()
-            h.update(header)
-            while True:
-                chunk = f.read(65536)
-                if not chunk:
-                    break
-                h.update(chunk)
-            return (True, h.hexdigest())
+            rest = f.read()
+            buf = header + rest
+        if not _has_kernel_imports(buf):
+            return (False, None)
+        return (True, hashlib.sha256(buf).hexdigest())
     except OSError:
         return (False, None)
 
@@ -3826,7 +3928,7 @@ def main():
         epilog=USAGE_EPILOG,
     )
     p.add_argument('driver', nargs='?', help='path to driver .sys')
-    p.add_argument('--version', '-V', action='version', version='BYOVDsn1per v2.6')
+    p.add_argument('--version', '-V', action='version', version='BYOVDsn1per v2.7')
 
     mode = p.add_argument_group('Scan modes (mutually exclusive on a single driver)')
     mode.add_argument('--quick', action='store_true', help='HVCI+sign only (no IDA)')
@@ -3879,6 +3981,8 @@ def main():
     shortcut.add_argument('--cve-list', action='store_true', help='list all CVEs in the matcher database and exit')
 
     addon = p.add_argument_group('Per-driver add-ons (combine with main scan)')
+    addon.add_argument('--all', action='store_true',
+                       help='everything: --deep + --poc + --strings + --yara-rule + --verify-load')
     addon.add_argument('--poc', action='store_true',
                        help='SAFE CVE matcher: which known CVEs target this driver (no exploitation)')
     addon.add_argument('--strings', action='store_true',
@@ -3916,6 +4020,13 @@ def main():
     output.add_argument('--no-banner', action='store_true', help='suppress banner art')
 
     args = p.parse_args()
+
+    if args.all:
+        args.deep = True
+        args.poc = True
+        args.strings = True
+        args.yara_rule = True
+        args.verify_load = True
 
     if args.no_color or not sys.stdout.isatty():
         C.disable()
@@ -3992,7 +4103,7 @@ def main():
         print(f"{C.BOLD}{mode_name} summary:{C.RESET}")
         print(f"  scanned files:    {stats['scanned_files']}")
         print(f"  .sys candidates:  {stats['sys_found']}")
-        print(f"  kernel drivers:   {C.GREEN}{stats['kernel_drivers']}{C.RESET}  (subsys=NATIVE + AEP!=0)")
+        print(f"  kernel drivers:   {C.GREEN}{stats['kernel_drivers']}{C.RESET}  (NATIVE + DriverEntry + kernel-import verified)")
         print(f"  duplicates:       {C.DIM}{stats['duplicates']}{C.RESET}")
         print(f"  copied to {out}/:  {C.BOLD}{stats['copied']}{C.RESET}")
         print(f"  errors:           {C.YELLOW if stats['errors'] else C.DIM}{stats['errors']}{C.RESET}")
