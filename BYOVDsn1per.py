@@ -3468,20 +3468,17 @@ def perfect_score(result: dict) -> tuple:
     weak_gates = {'WEAK_BITNESS_CHECK_ONLY'}
     detected_hard = set(gates) & hard_gates
     if not gates or detected_hard - weak_gates == set():
-                                             
         score += 25
     elif detected_hard:
-                                          
-        score -= 10 * len(detected_hard)
+        score -= min(20, 10 * len(detected_hard))
 
     if result.get('has_io_create_device') and not result.get('has_io_create_device_secure'):
         score += 5
     if result.get('sddl_strings'):
-        score -= 5                                                    
+        score -= 5
 
     archs = result.get('archetype_strings') or {}
-    if (archs.get('STEALTH_HIDDEN') or archs.get('ANTICHEAT_AC')
-            or archs.get('SELF_PROTECTION')):
+    if archs.get('STEALTH_HIDDEN'):
         score -= 25
 
     exports = (result.get('pe_extended') or {}).get('export_names', []) or []
@@ -3489,6 +3486,12 @@ def perfect_score(result: dict) -> tuple:
         score -= 25
     elif len(exports) >= 10:
         score -= 10
+
+    dispatcher_modes = {'legacy_mj14', 'mj14_recursive', 'wdf_static',
+                        'wdf_stub_inferred', 'minifilter'}
+    has_dispatcher = bool(set(modes) & dispatcher_modes)
+    if has_dispatcher and ic == 0 and len(prims) >= 3 and score < 30:
+        score = 30
 
     if (h.get('force_integrity') and h.get('guard_cf') and not h.get('init_wx')
             and 'minifilter' in modes and len(prims) >= 3
@@ -4107,7 +4110,7 @@ def _csv_dump(results: list) -> str:
     return out.getvalue()
 
 
-VERSION = 'v2.9.2'
+VERSION = 'v2.9.3'
 
 USAGE_EPILOG = r"""
 examples:
