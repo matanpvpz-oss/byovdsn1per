@@ -22,53 +22,92 @@ Identifies kernel drivers that load on modern Windows and exposes weaponizable p
 
 `--quick`, `--crawl`, `--diff` work on any OS; `--deep`, `--sweep`, dispatcher analysis require IDA.
 
+## Install
+
+Run from PowerShell (no admin required):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File install.ps1
+```
+
+This copies the scanner to `%LOCALAPPDATA%\Programs\BYOVDsn1per\` and adds it to your user PATH. Open a **new** terminal and you can type `byovdsn1per` from anywhere.
+
+To uninstall:
+
+```powershell
+.\install.ps1 -Uninstall
+```
+
+If you'd rather not install, the script runs in place too — see "Quick start" below.
+
+## Where do crawl results go?
+
+By default, `--crawl` and `--deepcrawl` write to:
+
+```
+%USERPROFILE%\BYOVDsn1per\crawler\
+```
+
+This is the same location regardless of where you launched the command from. Each driver is copied as `<original-stem>_<sha256[0:8]>.sys`, and two metadata files live alongside the harvest:
+
+- `.scanned_paths.txt` — directories already processed (resumable checkpoint)
+- `.sha256_cache.txt` — hash-of-each-file cache (skip re-hashing on re-runs)
+
+Override the location with `--crawl-out DIR`:
+
+```bash
+byovdsn1per --crawl --crawl-out D:\my_drivers
+```
+
 ## Quick start
+
+After running `install.ps1`, just type `byovdsn1per` from any terminal. If you skipped the installer, replace `byovdsn1per` with `python BYOVDsn1per.py` (or use `BYOVDsn1per.cmd` from the repo dir).
 
 ```bash
 # Single driver, full analysis
-python BYOVDsn1per.py driver.sys
+byovdsn1per driver.sys
 
 # Quick triage (no IDA dependency)
-python BYOVDsn1per.py --quick driver.sys
+byovdsn1per --quick driver.sys
 
 # Deep mode with per-IOCTL primitive classification
-python BYOVDsn1per.py --deep driver.sys
+byovdsn1per --deep driver.sys
 
 # CVE matcher (SAFE - no exploitation)
-python BYOVDsn1per.py --poc driver.sys
-python BYOVDsn1per.py --cve-list
+byovdsn1per --poc driver.sys
+byovdsn1per --cve-list
 
 # Strings + YARA rule
-python BYOVDsn1per.py --strings --yara-rule driver.sys
-python BYOVDsn1per.py --yara-rule --yara-out rule.yar driver.sys
+byovdsn1per --strings --yara-rule driver.sys
+byovdsn1per --yara-rule --yara-out rule.yar driver.sys
 
 # Compare two drivers
-python BYOVDsn1per.py --diff a.sys b.sys
+byovdsn1per --diff a.sys b.sys
 
 # Bulk sweep a directory
-python BYOVDsn1per.py --sweep drivers/ --filter perfect
+byovdsn1per --sweep drivers/ --filter perfect
 ```
 
 ## Crawl mode
 
-Discover kernel drivers on the system:
+Discover kernel drivers on the system. Output goes to `%USERPROFILE%\BYOVDsn1per\crawler\` by default (see "Where do crawl results go?" above).
 
 ```bash
 # 33 default known driver paths (System32\drivers, DriverStore, Program Files, vendor dirs)
-python BYOVDsn1per.py --crawl
+byovdsn1per --crawl
 
 # Every logical drive (A:..Z:) — entire PC
-python BYOVDsn1per.py --deepcrawl
+byovdsn1per --deepcrawl
 
 # Wipe the .scanned_paths.txt checkpoint + fresh deepcrawl
-python BYOVDsn1per.py --restart
+byovdsn1per --restart
 
 # Custom paths
-python BYOVDsn1per.py --crawl --crawl-path D:\extracted_drivers
-python BYOVDsn1per.py --crawl --crawl-out my_harvest/ --crawl-limit 100
+byovdsn1per --crawl --crawl-path D:\extracted_drivers
+byovdsn1per --crawl --crawl-out my_harvest/ --crawl-limit 100
 
 # Show what --crawl walks by default
-python BYOVDsn1per.py --list-default-roots
+byovdsn1per --list-default-roots
 ```
 
 Crawl filter is intentionally minimal — checks for `subsystem == NATIVE` and `AddressOfEntryPoint != 0` (has DriverEntry). Deduplicates by SHA256 using a `.sha256_cache.txt` so re-runs are instant. Resumable via per-directory checkpoint.
@@ -76,9 +115,9 @@ Crawl filter is intentionally minimal — checks for `subsystem == NATIVE` and `
 ## End-to-end pipeline
 
 ```bash
-python BYOVDsn1per.py --crawl                       # 1. discover
-python BYOVDsn1per.py --sweep crawler/ --poc        # 2. analyze + match CVEs
-python BYOVDsn1per.py --sweep crawler/ --filter perfect  # 3. focus on top-tier
+byovdsn1per --crawl                                  # 1. discover
+byovdsn1per --sweep %USERPROFILE%\BYOVDsn1per\crawler --poc       # 2. analyze + match CVEs
+byovdsn1per --sweep %USERPROFILE%\BYOVDsn1per\crawler --filter perfect  # 3. focus on top-tier
 ```
 
 ## Output modes

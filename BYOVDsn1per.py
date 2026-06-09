@@ -4380,8 +4380,12 @@ def main():
                        help='clear .scanned_paths.txt and start fresh. ALONE, implies --deepcrawl.')
     crawl.add_argument('--crawl-path', action='append', default=[], metavar='PATH',
                        help='add a crawl root path (repeatable). Combines with defaults unless --crawl-no-defaults.')
-    crawl.add_argument('--crawl-out', default='crawler', metavar='DIR',
-                       help='output directory for crawled drivers (default: ./crawler/)')
+    crawl.add_argument('--crawl-out',
+                       default=os.path.join(os.environ.get('USERPROFILE', '.'),
+                                            'BYOVDsn1per', 'crawler'),
+                       metavar='DIR',
+                       help='output directory for crawled drivers '
+                            '(default: %%USERPROFILE%%\\BYOVDsn1per\\crawler\\)')
     crawl.add_argument('--crawl-limit', type=int, default=0, metavar='N',
                        help='stop after N unique copies (default 0 = unlimited)')
     crawl.add_argument('--crawl-no-defaults', action='store_true',

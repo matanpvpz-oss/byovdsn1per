@@ -1,0 +1,22 @@
+__pycache__/
+*.pyc
+*.pyo
+
+# IDA databases
+*.i64
+*.idb
+*.id0
+*.id1
+*.id2
+*.nam
+*.til
+
+# Local scanner output
+crawler/
+*.sha256_cache.txt
+.scanned_paths.txt
+
+# Editor cruft
+.vscode/
+.idea/
+*.swp
