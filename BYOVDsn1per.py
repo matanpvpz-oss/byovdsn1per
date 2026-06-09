@@ -3484,6 +3484,12 @@ def perfect_score(result: dict) -> tuple:
             or archs.get('SELF_PROTECTION')):
         score -= 25
 
+    exports = (result.get('pe_extended') or {}).get('export_names', []) or []
+    if len(exports) >= 30:
+        score -= 25
+    elif len(exports) >= 10:
+        score -= 10
+
     if (h.get('force_integrity') and h.get('guard_cf') and not h.get('init_wx')
             and 'minifilter' in modes and len(prims) >= 3
             and score < 20):
@@ -4101,7 +4107,7 @@ def _csv_dump(results: list) -> str:
     return out.getvalue()
 
 
-VERSION = 'v2.9.1'
+VERSION = 'v2.9.2'
 
 USAGE_EPILOG = r"""
 examples:
