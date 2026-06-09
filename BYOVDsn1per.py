@@ -1,31 +1,4 @@
-#!/usr/bin/env python3
-"""
-BYOVDsn1per - BYOVD specimen scanner (IDA-powered).
-
-Unified CLI for kernel-driver analysis (BYOVD research). Replaces a stack
-of one-off scripts (byovd_ioctl_finder_v{2..5}.py, round*_sweep.py).
-Built on idalib (IDA Pro Essential 9.3 headless) for the dispatcher walk
-and pure-stdlib parsers (struct, hashlib, re) for PE info + hashing.
-
-Pipeline:
-    --crawl / --deepcrawl   ->  copy kernel drivers to crawler/
-    --sweep crawler/        ->  classify each (tier + score)
-    <driver.sys>            ->  full analysis on one specimen
-        +--poc              ->  match against 30-entry CVE database
-        +--strings          ->  ASCII+UTF-16 with tagged URLs/IPs/PDB/SDDL
-        +--yara-rule        ->  emit detection rule
-    --diff a.sys b.sys      ->  side-by-side comparison
-
-Accuracy is verified against pefile on 15 reference drivers (110/110 PASS
-on PE-info fields) + IDA-MCP-equivalent verification on aswSP.sys
-(37/37 IOCTLs, 100% recall + precision).
-
-See `memory/byovdsn1per_v1_2_accuracy.md` for the round-by-round audit
-log including known limitations and the bugs each version fixed.
-
-For per-flag help: `BYOVDsn1per --help`.
-"""
-
+                      
 import argparse
 import datetime
 import hashlib
@@ -42,29 +15,19 @@ from collections import deque
 from pathlib import Path
 from typing import Optional
 
-# ============================================================
-# PE constants (v2.5 - centralized; previously inlined as magic numbers)
-# ============================================================
-IMAGE_DOS_HEADER_E_LFANEW           = 0x3C        # offset of PE header pointer in DOS header
-IMAGE_OPTIONAL_HEADER_MAGIC_PE32    = 0x10B       # 32-bit PE
-IMAGE_OPTIONAL_HEADER_MAGIC_PE32P   = 0x20B       # 64-bit PE+
-IMAGE_FILE_DLL                      = 0x2000      # IMAGE_FILE_DLL characteristic
+IMAGE_DOS_HEADER_E_LFANEW           = 0x3C                                                   
+IMAGE_OPTIONAL_HEADER_MAGIC_PE32    = 0x10B                  
+IMAGE_OPTIONAL_HEADER_MAGIC_PE32P   = 0x20B                   
+IMAGE_FILE_DLL                      = 0x2000                                     
 IMAGE_FILE_EXECUTABLE_IMAGE         = 0x0002
 IMAGE_DLLCHARACTERISTICS_FORCE_INTEGRITY  = 0x0080
 IMAGE_DLLCHARACTERISTICS_GUARD_CF         = 0x4000
 IMAGE_SCN_MEM_EXECUTE               = 0x20000000
 IMAGE_SCN_MEM_WRITE                 = 0x80000000
-IMAGE_SUBSYSTEM_NATIVE              = 1           # kernel-mode driver
-DRIVER_OBJ_MJ_OFFSET_X64            = 0x70        # DRIVER_OBJECT.MajorFunction[0] @ +0x70
-DRIVER_OBJ_MJ_OFFSET_X86            = 0x38        # 32-bit DRIVER_OBJECT layout
+IMAGE_SUBSYSTEM_NATIVE              = 1                               
+DRIVER_OBJ_MJ_OFFSET_X64            = 0x70                                                
+DRIVER_OBJ_MJ_OFFSET_X86            = 0x38                                     
 
-# ============================================================
-# Banner
-# ============================================================
-# Banner — simple, accurate text. Previous block art was a figlet
-# for the wrong word (read as "BNOUDSn1pr"); a hand-typed figlet is
-# error-prone. Clean text is unambiguous.
-# ============================================================
 BANNER = r"""
 +============================================================+
 |                                                            |
@@ -75,17 +38,6 @@ BANNER = r"""
 +============================================================+
 """
 
-# ============================================================
-# CVE database — known BYOVD CVEs with safe identification.
-# Match criteria (all SAFE — no exploitation, just fingerprinting):
-#   - sha256: exact PoC binary match (definitive)
-#   - imphash: PE imp-hash match (high-confidence variant)
-#   - signer: signing CN matches
-#   - dispatcher: IOCTL set intersection
-#   - device_type: dispatcher device_type matches
-# Tagged with CVE ID, name, primitives gained, year, references.
-# Add new CVEs by appending a dict here.
-# ============================================================
 CVE_DATABASE = [
     {
         'cve': 'CVE-2019-16098',
@@ -93,7 +45,7 @@ CVE_DATABASE = [
         'year': 2019,
         'sha256_exact': {'01aa278b07b58dc46c84bd0b1b5c8e9ee4e62ea0bf7a695862444af32e87f1fd'},
         'signer_match': 'MICRO-STAR INTERNATIONAL',
-        'dispatcher_signature': {  # IOCTLs that uniquely fingerprint the dispatcher
+        'dispatcher_signature': {                                                   
             'device_types': {0x8000},
             'ioctl_codes': {0x80002048, 0x8000204C, 0x80002050, 0x80002054},
             'min_overlap': 3,
@@ -163,9 +115,7 @@ CVE_DATABASE = [
         'name': 'appid.sys (Lazarus FudModule rootkit)',
         'year': 2024,
         'sha256_exact': {'7031fec4cf04d7e4a395d8b48da41e8aab39df2b48bb55b7fcd45ad9e3c2b3a8'},
-        # Be specific: appid.sys is signed exactly "CN=Microsoft Windows".
-        # Don't substring-match against e.g. "Microsoft Windows Hardware
-        # Compatibility Publisher" (WHQL cert used by many vendors).
+                                                                          
         'signer_match': 'CN=MICROSOFT WINDOWS,',
         'dispatcher_signature': {
             'device_types': {0x0022},
@@ -257,14 +207,14 @@ CVE_DATABASE = [
             'ioctl_codes': set(),
             'min_overlap': 0,
         },
-        'extra_match': {'magic_cookie': 0x345821AB},  # the single-command magic cookie
+        'extra_match': {'magic_cookie': 0x345821AB},                                   
         'primitives_gained': ['KERNEL_SYMBOL_RES', 'MDL_PRIMITIVE', 'PHYS_MEM_MAP'],
         'pocs_known': [
             'https://github.com/UnknownPlayer1/Wellbia-Driver',
         ],
         'notes': 'XignCode3 anti-cheat. Single-command MJ_WRITE + 0x345821AB cookie gate.',
     },
-    # ---- v1.9.1 additions (10 more CVEs) ----
+                                               
     {
         'cve': 'CVE-2019-13634',
         'name': 'PCDSRVC{...}.sys (PC-Doctor)',
@@ -415,7 +365,7 @@ CVE_DATABASE = [
         'pocs_known': [],
         'notes': 'Echo Anti-Cheat. Process memory access primitive.',
     },
-    # ---- v2.1 additions (10 more CVEs — 20 -> 30) ----
+                                                        
     {
         'cve': 'CVE-2024-33223',
         'name': 'IOMap64.sys (ASUS I/O Map)',
@@ -568,13 +518,7 @@ CVE_DATABASE = [
     },
 ]
 
-
-# v2.5: device_types that appear in MANY unrelated CVEs across the DB.
-# A device_type match against one of these is non-evidence (it's just the
-# Windows convention for "vendor / IOCTL space"). Computed from the CVE
-# database at import time.
 def _compute_polluted_device_types(db, threshold=3):
-    """Return device_types that appear in >= `threshold` CVE entries."""
     counts = {}
     for cve in db:
         disp = cve.get('dispatcher_signature', {})
@@ -582,27 +526,9 @@ def _compute_polluted_device_types(db, threshold=3):
             counts[dt] = counts.get(dt, 0) + 1
     return {dt for dt, n in counts.items() if n >= threshold}
 
-
 _POLLUTED_DEVICE_TYPES = _compute_polluted_device_types(CVE_DATABASE)
 
-
 def match_cves(result: dict, min_confidence: str = 'LOW') -> list:
-    """SAFE CVE matcher — fingerprints only, no exploitation.
-
-    Confidence tiers (v2.5):
-      CONFIRMED  - SHA256 exact match
-      HIGH       - signer + dispatcher_overlap >= min_overlap  (score >= 5)
-      MEDIUM     - signer match OR ioctl_overlap (score >= 3)
-      LOW        - non-polluted device_type match only (score >= 1)
-
-    v2.5 fix: a device_type-only match against a polluted type (e.g. 0x0022
-    used by 9 different CVEs) was generating LOW-confidence noise on every
-    sweep result. v2.5 awards the device_type score ONLY when the matching
-    type is NOT in the polluted set (computed from the DB at import time
-    as types appearing in >= 3 CVE entries).
-
-    `min_confidence` filters out anything below the named tier.
-    """
     sig = result.get('signing', {}) or {}
     sha256 = (result.get('hashes', {}) or {}).get('sha256', '').lower()
     imphash = (result.get('pe_extended', {}) or {}).get('imphash', '')
@@ -616,26 +542,24 @@ def match_cves(result: dict, min_confidence: str = 'LOW') -> list:
     for cve in CVE_DATABASE:
         score = 0
         evidence = []
-        # SHA256 exact match (always CONFIRMED)
+                                               
         if cve.get('sha256_exact') and sha256 in cve['sha256_exact']:
             matched.append({**cve, 'confidence': 'CONFIRMED',
                             'evidence': ['sha256_exact_match']})
             continue
-        # Signer match
+                      
         signer_hit = False
         if cve.get('signer_match') and cve['signer_match'].upper() in subject:
             score += 2
             evidence.append(f'signer:{cve["signer_match"]}')
             signer_hit = True
-        # Dispatcher IOCTL overlap
+                                  
         disp = cve.get('dispatcher_signature', {})
         overlap = len(ioctls_set & set(disp.get('ioctl_codes', set())))
         if overlap >= disp.get('min_overlap', 1) and disp.get('ioctl_codes'):
             score += 3
             evidence.append(f'ioctl_overlap:{overlap}/{len(disp["ioctl_codes"])}')
-        # Device-type match — v2.5: skip polluted types unless we already
-        # have signer or ioctl evidence. (A polluted-type match in
-        # isolation is just noise: every 0x0022 driver "matches" 9 CVEs.)
+                                                                         
         if disp.get('device_types'):
             matched_types = disp['device_types'] & dev_types
             if matched_types:
@@ -644,10 +568,10 @@ def match_cves(result: dict, min_confidence: str = 'LOW') -> list:
                     score += 1
                     evidence.append(f'device_type:{",".join(hex(d) for d in non_polluted)}')
                 elif score > 0:
-                    # Polluted match, but supported by signer or ioctl evidence
+                                                                               
                     score += 1
                     evidence.append(f'device_type:{",".join(hex(d) for d in matched_types)} (polluted)')
-        # Extra match (e.g. magic cookie gate)
+                                              
         extra = cve.get('extra_match', {})
         if 'magic_cookie' in extra and 'MAGIC_COOKIE' in gates:
             score += 2
@@ -664,7 +588,6 @@ def match_cves(result: dict, min_confidence: str = 'LOW') -> list:
     return sorted(matched, key=lambda m: tier_rank.get(m.get('confidence', 'LOW'), 1),
                   reverse=True)
 
-# Colors (ANSI)
 class C:
     RED = "\033[31m"
     GREEN = "\033[32m"
@@ -683,23 +606,19 @@ class C:
             if not k.startswith('_') and k.isupper():
                 setattr(cls, k, "")
 
-
-# ============================================================
-# Burnt thumbprints + signers
-# ============================================================
 BURNT_THUMBS_PREFIX = {
-    "A70779EB",                    # LeYao
-    "D2BA5AE9",                    # Zhengzhou 403
-    "451B7F8A",                    # ToDesk
-    "96EBEB70302B7D9C",            # Shanxi Rongshengyuan
-    "C7809E8F98522EDD",            # Shanxi Rongshengyuan variant
-    "AF7B4364",                    # WDKTestCert
-    "4DFEC14A29F77B3E",            # "Discord Inc." impersonating
-    "BF3A369187A3D2F1",            # "Brave Software" impersonating
-    "17F159DC28DB63B8",            # "BattleEyeService" impersonating
-    "2BEDA2D003DA0F44",            # "Epic Games Inc." impersonating
-    "D9460552837AE6F0",            # "EasyAntiCheat Oy" impersonating
-    "B383EE03B601B5DD",            # "Henan Pushitong"
+    "A70779EB",                           
+    "D2BA5AE9",                                   
+    "451B7F8A",                            
+    "96EBEB70302B7D9C",                                  
+    "C7809E8F98522EDD",                                          
+    "AF7B4364",                                 
+    "4DFEC14A29F77B3E",                                          
+    "BF3A369187A3D2F1",                                            
+    "17F159DC28DB63B8",                                              
+    "2BEDA2D003DA0F44",                                             
+    "D9460552837AE6F0",                                              
+    "B383EE03B601B5DD",                               
 }
 
 BURNT_SIGNER_SUBSTRINGS = {
@@ -710,7 +629,6 @@ BURNT_SIGNER_SUBSTRINGS = {
     "Henan Pushitong",
 }
 
-# Archetype string buckets (v4 carry-over)
 ARCHETYPE_STRINGS = {
     "STEALTH_HIDDEN": [
         "hidden!", "HahaDbg", "[hide]", "exclude file list",
@@ -735,7 +653,6 @@ ARCHETYPE_STRINGS = {
     ],
 }
 
-# Primitive classification — API → class
 PRIMITIVE_CLASSES = {
     "PHYS_MEM_MAP":     {"MmMapIoSpace", "MmMapIoSpaceEx", "MmCopyVirtualMemory",
                          "MmMapLockedPagesSpecifyCache", "MmGetPhysicalAddress",
@@ -760,13 +677,7 @@ PRIMITIVE_CLASSES = {
     "WDF":              {"WdfDriverCreate", "WdfDeviceCreate", "WdfIoQueueCreate"},
 }
 
-# ============================================================
-# PE-level HVCI flag extraction (no IDA needed)
-# ============================================================
 def hvci_flags_from_buf(buf: bytes) -> dict:
-    """Inner implementation that operates on an already-read buffer.
-    v2.5: shared-buffer variant so a single file read can feed hvci_flags +
-    file_hashes + pe_extended_info without re-reading on disk."""
     try:
         if buf[:2] != b"MZ":
             return {"error": "not MZ"}
@@ -801,23 +712,18 @@ def hvci_flags_from_buf(buf: bytes) -> dict:
     except Exception as e:
         return {"error": f"pe parse: {e}"}
 
-
 def hvci_flags(path: str) -> dict:
-    """Extract DllCharacteristics + per-section W+X for INIT."""
     try:
         with open(path, "rb") as f:
             return hvci_flags_from_buf(f.read())
     except OSError as e:
         return {"error": f"open: {e}"}
 
-
 def file_hashes_from_buf(buf: bytes) -> dict:
-    """Stream MD5/SHA1/SHA256 over an already-read buffer. v2.5: matches
-    file_hashes() output but takes bytes rather than a path."""
     h_md5 = hashlib.md5()
     h_sha1 = hashlib.sha1()
     h_sha256 = hashlib.sha256()
-    # Chunk for cache friendliness even on a buf; modest speedup vs single update
+                                                                                 
     for i in range(0, len(buf), 65536):
         chunk = buf[i:i+65536]
         h_md5.update(chunk)
@@ -830,18 +736,10 @@ def file_hashes_from_buf(buf: bytes) -> dict:
         'size':   len(buf),
     }
 
-
 def hvci_perfect(h: dict) -> bool:
     return bool(h.get("force_integrity")) and bool(h.get("guard_cf")) and not bool(h.get("init_wx"))
 
-
-# ============================================================
-# Maximum driver info — hashes, PE compile stamp, sections,
-# imports, TLS callbacks, version-info, IMP-hash fingerprint.
-# All PE-level (no IDA, no subprocess) — works in --offline-mode.
-# ============================================================
 def file_hashes(path: str) -> dict:
-    """Compute MD5 / SHA1 / SHA256 + size. Streaming so big drivers don't OOM."""
     h_md5 = hashlib.md5()
     h_sha1 = hashlib.sha1()
     h_sha256 = hashlib.sha256()
@@ -864,26 +762,14 @@ def file_hashes(path: str) -> dict:
     except Exception as e:
         return {'error': f'hash: {e}'}
 
-
 def pe_extended_info(path: str) -> dict:
-    """Path-taking entry point. Reads the file once and calls
-    pe_extended_info_from_buf().
-    """
     try:
         with open(path, 'rb') as f:
             return pe_extended_info_from_buf(f.read())
     except OSError as e:
         return {'error': f'open: {e}'}
 
-
 def pe_extended_info_from_buf(buf: bytes) -> dict:
-    """Extract maximum PE info: compile stamp, linker, subsystem, image
-    base, full section table, imports, TLS, version-info resource, and
-    an IMPHASH-like fingerprint (sorted lowercase 'dll.api,...' SHA1).
-
-    v2.5: buf-taking variant so a single read can feed hvci/hashes/PE-info
-    in quick_scan / full_scan without re-opening the file 3 times.
-    """
     try:
         if buf[:2] != b'MZ':
             return {'error': 'not MZ'}
@@ -897,7 +783,7 @@ def pe_extended_info_from_buf(buf: bytes) -> dict:
         opt_size = struct.unpack_from('<H', buf, coff + 16)[0]
         characteristics = struct.unpack_from('<H', buf, coff + 18)[0]
         opt_off = coff + 20
-        magic = struct.unpack_from('<H', buf, opt_off)[0]  # 0x10B PE32, 0x20B PE32+
+        magic = struct.unpack_from('<H', buf, opt_off)[0]                           
         is64 = magic == 0x20B
         linker_major = buf[opt_off + 2]
         linker_minor = buf[opt_off + 3]
@@ -916,16 +802,13 @@ def pe_extended_info_from_buf(buf: bytes) -> dict:
             subsystem = struct.unpack_from('<H', buf, opt_off + 68)[0]
             dll_char = struct.unpack_from('<H', buf, opt_off + 70)[0]
             data_dir_off = opt_off + 96
-        # Data directories (16 entries of 8 bytes each)
-        # 0=EXPORT 1=IMPORT 2=RESOURCE 3=EXCEPTION 5=BASERELOC
-        # 6=DEBUG 9=TLS 12=IAT
+                                                       
         dirs = []
         for i in range(16):
             rva = struct.unpack_from('<I', buf, data_dir_off + i*8)[0]
             sz  = struct.unpack_from('<I', buf, data_dir_off + i*8 + 4)[0]
             dirs.append((rva, sz))
 
-        # Sections (40 bytes each, after optional header)
         sections_off = opt_off + opt_size
         sections = []
         for i in range(num_sections):
@@ -943,7 +826,6 @@ def pe_extended_info_from_buf(buf: bytes) -> dict:
                 'flags': _section_flag_str(char),
             })
 
-        # RVA → file offset translator using section table
         def rva_to_off(rva):
             for sec in sections:
                 v = int(sec['va'], 16)
@@ -951,13 +833,12 @@ def pe_extended_info_from_buf(buf: bytes) -> dict:
                     return int(sec['raw_off'], 16) + (rva - v)
             return None
 
-        # Imports walk for IMP-hash fingerprint
         imports = []
         imp_dir_rva, _ = dirs[1]
         if imp_dir_rva:
             off = rva_to_off(imp_dir_rva)
             if off:
-                # IMAGE_IMPORT_DESCRIPTOR is 20 bytes; iterate until name_rva == 0
+                                                                                  
                 while off + 20 <= len(buf):
                     orig_first_thunk = struct.unpack_from('<I', buf, off)[0]
                     name_rva = struct.unpack_from('<I', buf, off + 12)[0]
@@ -969,7 +850,7 @@ def pe_extended_info_from_buf(buf: bytes) -> dict:
                         break
                     dll_end = buf.find(b'\0', name_off)
                     dll_name = buf[name_off:dll_end].decode('latin-1', errors='ignore').lower()
-                    # Walk thunk table
+                                      
                     thunk_rva = orig_first_thunk if orig_first_thunk else first_thunk
                     thunk_off = rva_to_off(thunk_rva) if thunk_rva else None
                     apis = []
@@ -982,10 +863,10 @@ def pe_extended_info_from_buf(buf: bytes) -> dict:
                             if val == 0:
                                 break
                             if val & mask:
-                                # Import by ordinal
+                                                   
                                 apis.append(f'ord_{val & 0xFFFF:x}')
                             else:
-                                # Import by name — IMAGE_IMPORT_BY_NAME = WORD hint + asciiz name
+                                                                                                 
                                 hint_off = rva_to_off(val & 0xFFFFFFFF)
                                 if hint_off and hint_off + 2 < len(buf):
                                     name_e = buf.find(b'\0', hint_off + 2)
@@ -993,16 +874,10 @@ def pe_extended_info_from_buf(buf: bytes) -> dict:
                                     if api:
                                         apis.append(api)
                             t += step
-                            if len(apis) > 500: break  # safety
+                            if len(apis) > 500: break          
                     imports.append({'dll': dll_name, 'api_count': len(apis), 'apis': apis})
                     off += 20
 
-        # IMP-hash (Mandiant/pefile-compatible): "dll.api" pairs in
-        # ORIGINAL ORDER (NOT sorted), comma-joined, MD5-hashed.
-        # Library name is lowercased and only stripped if the ext is one
-        # of ocx/sys/dll (matches pefile's exts list — NOT .exe).
-        # Verified against pefile's get_imphash() on 5 reference drivers
-        # in v2.0 workflow.
         imphash_pairs = []
         for imp in imports:
             d = imp['dll'].lower()
@@ -1013,20 +888,17 @@ def pe_extended_info_from_buf(buf: bytes) -> dict:
                 imphash_pairs.append(f'{d}.{api.lower()}')
         imphash = hashlib.md5(','.join(imphash_pairs).encode()).hexdigest() if imphash_pairs else None
 
-        # TLS dir
         tls_rva, tls_sz = dirs[9]
         has_tls = bool(tls_rva and tls_sz)
 
-        # Compile timestamp
         import datetime
         try:
             compile_dt = datetime.datetime.fromtimestamp(time_date, tz=datetime.timezone.utc).isoformat()
         except Exception:
             compile_dt = None
 
-        # Aggregate
         total_apis = sum(i['api_count'] for i in imports)
-        # v2.0 — workflow-verified extractors (matches pefile output exactly)
+                                                                             
         rich = extract_rich_header(buf)
         ver = extract_version_info(buf)
         dbg = extract_debug_dir(buf)
@@ -1053,7 +925,7 @@ def pe_extended_info_from_buf(buf: bytes) -> dict:
             'import_dll_count': len(imports),
             'import_api_count': total_apis,
             'imphash': imphash,
-            # v2.0 workflow-verified fields
+                                           
             'rich_header_present':    rich['rich_header_present'],
             'rich_dans_xor_key':      rich['rich_dans_xor_key'],
             'rich_header_records':    rich['rich_header_records'],
@@ -1069,7 +941,6 @@ def pe_extended_info_from_buf(buf: bytes) -> dict:
     except Exception as e:
         return {'error': f'pe-ext: {e}'}
 
-
 def _section_flag_str(char):
     out = []
     if char & 0x20: out.append('CODE')
@@ -1080,7 +951,6 @@ def _section_flag_str(char):
     if char & 0x40000000: out.append('READ')
     if char & 0x80000000: out.append('WRITE')
     return '|'.join(out)
-
 
 _MACHINE_NAMES = {
     0x014c: 'i386',  0x0200: 'IA64', 0x8664: 'AMD64',
@@ -1097,26 +967,7 @@ _SUBSYSTEM_NAMES = {
 }
 def _subsystem_name(s): return _SUBSYSTEM_NAMES.get(s, f'unk_{s}')
 
-
-# ============================================================
-# v2.0 — Workflow-verified PE-info extractors.
-# Each was adversarially verified against pefile's output on 5
-# reference drivers (RTCore64, gdrv, sandra_x64, Corsair LL Access,
-# AMDRyzenMaster) with 5/5 PASS per extractor; refute phase returned
-# refuted=false for all. See memory/byovdsn1per_v1_2_accuracy.md
-# (Round 28 — v2.0 workflow) for the audit trail.
-# ============================================================
 def decode_comp_id(comp_id: int) -> dict:
-    """Decode Microsoft Rich Header comp_id (u32) -> producer tool + VS family.
-
-    comp_id = (ProdID << 16) | MinVer
-      ProdID - internal Microsoft tool identifier
-      MinVer - linker/compiler build number (Microsoft well-known builds)
-
-    Mapping is approximate; ProdID enumeration is community-reverse-engineered
-    (see github.com/dishather/richprint). MinVer ranges below cover the
-    commonly-seen VS toolchain build numbers for 2005-2022.
-    """
     prod_id = (comp_id >> 16) & 0xFFFF
     min_ver = comp_id & 0xFFFF
     PROD = {
@@ -1184,22 +1035,12 @@ def decode_comp_id(comp_id: int) -> dict:
         0x0111: "VS2017/2019 masm rev",
     }
     tool = PROD.get(prod_id, f"prod_0x{prod_id:04X}")
-    # v2.1.1 fix: comp_id family decoder. The VS family is identified
-    # PRIMARILY by ProdID class (VS2013's range is 0x00C9-0x00CC, VS2015's
-    # 0x00DB-0x00DE, VS2017's 0x00FF-0x0102, VS2019's 0x0103-0x0107,
-    # VS2022's 0x0108-0x010B). MinVer alone is ambiguous because:
-    #   - VS2013 Update 5 has build_number 40629
-    #   - VS2015 RTM has build_number 23026
-    #   - VS2017 RTM has 25506
-    # If we check VS2013's MinVer range first (21005-40629), it swallows
-    # all of VS2015 + VS2017 + VS2019's build numbers.
-    # Strategy: classify by ProdID class first (most reliable), fall back
-    # to MinVer ordering check from NEWEST to OLDEST.
+                                                                     
     family = None
     if 0x0108 <= prod_id <= 0x010C:
         family = "VS2022"
     elif 0x0103 <= prod_id <= 0x0107 or 0x010D <= prod_id <= 0x0111:
-        # VS2019 + VS2017/2019 revision range
+                                             
         family = "VS2019"
     elif 0x00FF <= prod_id <= 0x0102:
         family = "VS2017"
@@ -1221,8 +1062,7 @@ def decode_comp_id(comp_id: int) -> dict:
         family = "VS.NET 2002"
     elif 0x0015 <= prod_id <= 0x0019:
         family = "VC6"
-    # If ProdID didn't classify (uncommon legacy tools or unknown), fall
-    # back to MinVer check newest-first to avoid VS2013 range swallowing.
+                                                                        
     if family is None and min_ver:
         if 30133 <= min_ver <= 37500:
             family = "VS2022"
@@ -1251,18 +1091,7 @@ def decode_comp_id(comp_id: int) -> dict:
     return {"prod_id": prod_id, "min_ver": min_ver,
             "tool": tool, "family": family}
 
-
 def extract_rich_header(buf: bytes) -> dict:
-    """Microsoft "Rich" header - compiler/build-tool fingerprint sandwiched
-    between the DOS stub and the PE header. Format:
-        DanS_marker (XOR-encoded "DanS")
-        3 x padding dwords (also XOR-encoded zero == the key)
-        N x { comp_id (u32) XOR key, build_count (u32) XOR key }
-        "Rich" literal magic + 4-byte XOR key.
-    Returns rich_header_present + rich_dans_xor_key (8-char lowercase hex,
-    pefile big-endian convention) + rich_header_records list with v2.1
-    decoded tool + VS family per record + rich_compiler_family summary.
-    """
     RICH, DANS = b"Rich", b"DanS"
     result = {"rich_header_present": False, "rich_dans_xor_key": None,
               "rich_header_records": [], "rich_compiler_family": None}
@@ -1303,18 +1132,14 @@ def extract_rich_header(buf: bytes) -> dict:
     result["rich_header_present"] = True
     result["rich_dans_xor_key"] = "%08x" % struct.unpack(">I", xor_key_bytes)[0]
     result["rich_header_records"] = records
-    # v2.1.1: family from PE Optional Header linker version is canonical
-    # truth (Microsoft assigns linker versions per VS major release). Comp_id
-    # ProdIDs are AMBIGUOUS (Microsoft reuses 0x0103-0x010B across VS2017,
-    # VS2019, and VS2022 generations), so they can't reliably determine the
-    # major VS version on their own.
+                                                                        
     try:
         pe_off = struct.unpack_from('<I', buf, 0x3C)[0]
-        opt_off = pe_off + 4 + 20  # PE sig + COFF header
+        opt_off = pe_off + 4 + 20                        
         lnk_major = buf[opt_off + 2]
         lnk_minor = buf[opt_off + 3]
         result["linker_major_minor"] = f"{lnk_major}.{lnk_minor:02d}"
-        # Map linker to VS family
+                                 
         fam_by_linker = None
         if lnk_major == 14:
             if 30 <= lnk_minor:     fam_by_linker = "VS2022"
@@ -1333,7 +1158,7 @@ def extract_rich_header(buf: bytes) -> dict:
             result["rich_compiler_family"] = fam_by_linker
     except Exception:
         pass
-    # Fallback: comp_id voting if linker fallthrough fails
+                                                          
     if not result.get("rich_compiler_family"):
         fams = [r['family'] for r in records if r.get('family')]
         if fams:
@@ -1347,12 +1172,7 @@ def extract_rich_header(buf: bytes) -> dict:
                 result["rich_compiler_family"] = fams[-1]
     return result
 
-
 def extract_version_info(buf: bytes) -> dict:
-    """VS_VERSION_INFO StringFileInfo extractor — pulls CompanyName,
-    ProductName, FileDescription, OriginalFilename, InternalName,
-    FileVersion, ProductVersion, LegalCopyright from RT_VERSION resource.
-    Returns flat dict {key: value}. Empty {} if no RT_VERSION."""
     def _u16(b, o): return struct.unpack_from("<H", b, o)[0]
     def _u32(b, o): return struct.unpack_from("<I", b, o)[0]
     def _align4(o): return (o + 3) & ~3
@@ -1381,7 +1201,7 @@ def extract_version_info(buf: bytes) -> dict:
         rsrc_rva = _u32(buf, dd_off + 2*8)
         if rsrc_rva == 0:
             return {}
-        # Sections for RVA→offset
+                                 
         sec_off = opt_off + opt_size
         secs = []
         for i in range(num_sections):
@@ -1396,7 +1216,7 @@ def extract_version_info(buf: bytes) -> dict:
         rsrc_off = rva2off(rsrc_rva)
         if rsrc_off is None:
             return {}
-        # Walk resource dir for RT_VERSION (16)
+                                               
         results = []
         def walk(cur, level, path):
             if cur is None or cur + 16 > len(buf): return
@@ -1424,7 +1244,7 @@ def extract_version_info(buf: bytes) -> dict:
         data_off = rva2off(data_rva)
         if data_off is None: return {}
         end = data_off + data_size
-        # Parse VS_VERSIONINFO
+                              
         if data_off + 6 > end: return {}
         block_len = _u16(buf, data_off)
         value_len = _u16(buf, data_off + 2)
@@ -1434,7 +1254,7 @@ def extract_version_info(buf: bytes) -> dict:
         if key_str != "VS_VERSION_INFO":
             return {}
         cur = _align4(cur)
-        cur += value_len  # skip VS_FIXEDFILEINFO
+        cur += value_len                         
         cur = _align4(cur)
         out = {}
         while cur < block_end:
@@ -1443,7 +1263,7 @@ def extract_version_info(buf: bytes) -> dict:
             if child_len == 0: break
             peek_key, _ = _read_wsz(buf, cur + 6, block_end)
             if peek_key == "StringFileInfo":
-                # parse StringTable children
+                                            
                 sfi_end = min(cur + child_len, block_end)
                 sfi_cur = cur + 6
                 sfi_key, sfi_cur = _read_wsz(buf, sfi_cur, sfi_end)
@@ -1454,7 +1274,7 @@ def extract_version_info(buf: bytes) -> dict:
                     if st_len == 0: break
                     st_end = min(sfi_cur + st_len, sfi_end)
                     st_cur = sfi_cur + 6
-                    _, st_cur = _read_wsz(buf, st_cur, st_end)  # lang key
+                    _, st_cur = _read_wsz(buf, st_cur, st_end)            
                     st_cur = _align4(st_cur)
                     while st_cur < st_end:
                         if st_cur + 6 > st_end: break
@@ -1466,23 +1286,11 @@ def extract_version_info(buf: bytes) -> dict:
                         s_cur = _align4(s_cur)
                         val_bytes = (s_val_len * 2) if s_type == 1 else s_val_len
                         v_end = min(s_cur + val_bytes, s_end)
-                        # v2.0.1: encoding-detection fallback. PE spec says
-                        # VS_VERSION strings are UTF-16LE, but some legacy
-                        # drivers emit UTF-8 (e.g. imdisk.sys LegalCopyright)
-                        # OR UTF-16LE for ASCII with embedded UTF-8 for
-                        # non-ASCII (also imdisk pattern).
-                        # Strategy:
-                        #  1. Try UTF-16LE first.
-                        #  2. If result has U+A0..U+FFFF range chars in the
-                        #     CJK / unassigned ranges, OR replacement chars,
-                        #     retry as UTF-8 on the raw bytes.
-                        #  3. Pick the result that has FEWER high-Unicode
-                        #     codepoints (legal copyright is mostly Latin).
+                                                                           
                         raw = bytes(buf[s_cur:v_end]).rstrip(b"\x00")
                         v_utf16, _ = _read_wsz(buf, s_cur, v_end)
                         v = v_utf16
-                        # Heuristic: count "suspicious" chars (BMP > 0x07FF
-                        # except specific Latin extension ranges).
+                                                                           
                         susp_utf16 = sum(
                             1 for c in v_utf16
                             if ord(c) > 0x07FF or 0xFFFD == ord(c)
@@ -1490,10 +1298,7 @@ def extract_version_info(buf: bytes) -> dict:
                         if susp_utf16 > 0:
                             try:
                                 v_u8 = raw.decode("utf-8")
-                                # Count NULs + suspicious; UTF-8 mis-decode
-                                # of UTF-16LE bytes produces a string riddled
-                                # with NUL characters between letters, so
-                                # NULs are equally bad as high-CJK.
+                                                                           
                                 susp_u8 = sum(
                                     1 for c in v_u8
                                     if ord(c) > 0x07FF or 0xFFFD == ord(c) or ord(c) == 0
@@ -1517,11 +1322,7 @@ def extract_version_info(buf: bytes) -> dict:
     except Exception:
         return {}
 
-
 def extract_debug_dir(buf: bytes) -> dict:
-    """Debug Directory CV_INFO_PDB70 (RSDS) extractor. Returns
-    debug_pdb_path (UTF-8), debug_pdb_guid (32-char lowercase hex no
-    dashes), debug_pdb_age (int). All None if no CodeView entry."""
     def _u16(b, o): return struct.unpack_from("<H", b, o)[0]
     def _u32(b, o): return struct.unpack_from("<I", b, o)[0]
     out = {"debug_pdb_path": None, "debug_pdb_guid": None, "debug_pdb_age": None}
@@ -1549,7 +1350,7 @@ def extract_debug_dir(buf: bytes) -> dict:
         debug_size = _u32(buf, dd_off + 6*8 + 4)
         if debug_rva == 0 or debug_size == 0:
             return out
-        # Build sections for RVA→offset
+                                       
         sec_off = opt_off + opt_size
         secs = []
         for i in range(num_sections):
@@ -1575,7 +1376,7 @@ def extract_debug_dir(buf: bytes) -> dict:
             size_of_data = _u32(buf, e + 16)
             addr_of_raw = _u32(buf, e + 20)
             ptr_raw = _u32(buf, e + 24)
-            if dtype != 2:  # IMAGE_DEBUG_TYPE_CODEVIEW
+            if dtype != 2:                             
                 continue
             if size_of_data < 25:
                 continue
@@ -1605,11 +1406,7 @@ def extract_debug_dir(buf: bytes) -> dict:
     except Exception:
         return out
 
-
 def extract_tls_callbacks(buf: bytes) -> dict:
-    """TLS callback addresses extractor. Walks IMAGE_TLS_DIRECTORY's
-    AddressOfCallBacks. Returns count + list of absolute VAs (matches
-    pefile semantics)."""
     def _u16(b, o): return struct.unpack_from("<H", b, o)[0]
     def _u32(b, o): return struct.unpack_from("<I", b, o)[0]
     def _u64(b, o): return struct.unpack_from("<Q", b, o)[0]
@@ -1663,7 +1460,7 @@ def extract_tls_callbacks(buf: bytes) -> dict:
         if cb_off is None: return out
         addrs = []
         cur = cb_off
-        for _ in range(257):  # max 256 + sentinel
+        for _ in range(257):                      
             if cur + ptr_size > len(buf): break
             entry = _u64(buf, cur) if is_pe32_plus else _u32(buf, cur)
             if entry == 0: break
@@ -1674,9 +1471,7 @@ def extract_tls_callbacks(buf: bytes) -> dict:
     except Exception:
         return out
 
-
 def extract_exports(buf: bytes) -> dict:
-    """Export Table walker. Returns {'export_names': [...]} matching pefile."""
     def _u16(b, o): return struct.unpack_from("<H", b, o)[0]
     def _u32(b, o): return struct.unpack_from("<I", b, o)[0]
     out = {"export_names": []}
@@ -1734,10 +1529,6 @@ def extract_exports(buf: bytes) -> dict:
     except Exception:
         return out
 
-
-# ============================================================
-# v2.1 - Strings extractor (ASCII + UTF-16LE) with regex tagging
-# ============================================================
 _STR_ASCII_RE = re.compile(rb'[\x20-\x7e]{%d,}' % 6)
 _STR_UTF16_RE = re.compile(rb'(?:[\x20-\x7e]\x00){4,}')
 _TAG_URL_RE = re.compile(r'(?i)\b(?:https?|ftp)://[^\s\x00<>"]{4,}')
@@ -1752,11 +1543,6 @@ _TAG_PDB_RE = re.compile(r'(?i)[A-Z]:\\(?:[A-Za-z0-9_\- .{}]+\\)*[A-Za-z0-9_\- .
 _TAG_DEVICE_RE = re.compile(r'\\(?:Device|DosDevices|GLOBAL\?\?)\\[A-Za-z0-9_\- {}.]+')
 _TAG_SDDL_RE = re.compile(r'[DOSG]:(?:\([A-Z]+;[A-Z]*;[A-Z0-9]+;[^;)]*;[^;)]*;[A-Z0-9]+\))+')
 
-# Pattern groups: most tag patterns need ':' or '\\' to match, so we can
-# split strings into "structural" (have those chars) and "plain" (don't),
-# then run only the needed patterns on each group. v2.5 split:
-#   STRUCT_PATTERNS — need ':' or '\\' in the string
-#   PLAIN_PATTERNS  — IPv4 (needs '.') and GUID (needs '-')
 _TAG_STRUCT_PATTERNS = (
     ('urls',         _TAG_URL_RE),
     ('reg_keys',     _TAG_REG_RE),
@@ -1767,25 +1553,11 @@ _TAG_STRUCT_PATTERNS = (
 )
 _TAG_IPV4_LABEL = 'ipv4'
 _TAG_GUID_LABEL = 'guids'
-_HAS_STRUCT_CHAR = re.compile(r'[:\\]')   # cheap pre-filter for STRUCT group
-_HAS_DOT          = re.compile(r'\.')      # pre-filter for IPv4
-_HAS_DASH         = re.compile(r'-')       # pre-filter for GUID
+_HAS_STRUCT_CHAR = re.compile(r'[:\\]')                                      
+_HAS_DOT          = re.compile(r'\.')                           
+_HAS_DASH         = re.compile(r'-')                            
 
 def extract_strings(path: str, min_ascii: int = 6, min_utf16: int = 4) -> dict:
-    """Extract ASCII + UTF-16LE strings from a PE buffer and tag them
-    against URL / IPv4 / registry / filesystem path / GUID / PDB / SDDL
-    regex classes.
-
-    v2.5 speed: split tag patterns into two groups by required char class.
-    Skip strings that don't have ':' or '\\' for the 6 structural patterns.
-    Skip strings without '.' for IPv4, without '-' for GUID. Avoids 8 regex
-    calls per uninteresting string.
-
-    Returns:
-      ascii_count, utf16_count: raw extraction stats
-      top_ascii / top_utf16: 50 longest strings (debug / human triage)
-      tagged: {urls, ipv4, reg_keys, paths, pdbs, guids, device_paths, sddl}
-    """
     try:
         with open(path, 'rb') as f:
             buf = f.read()
@@ -1803,7 +1575,7 @@ def extract_strings(path: str, min_ascii: int = 6, min_utf16: int = 4) -> dict:
         except Exception:
             pass
     all_str = ascii_set | utf16_set
-    # Single pass over strings: classify into 3 groups by char content.
+                                                                       
     struct_strs, ipv4_strs, guid_strs = [], [], []
     for s in all_str:
         if _HAS_STRUCT_CHAR.search(s): struct_strs.append(s)
@@ -1834,19 +1606,7 @@ def extract_strings(path: str, min_ascii: int = 6, min_utf16: int = 4) -> dict:
         'tagged': tagged,
     }
 
-
-# ============================================================
-# v2.1 - YARA rule emission
-# ============================================================
 def emit_yara_rule(result: dict, rule_name: str = None) -> str:
-    """Emit a YARA detection rule for the scanned driver.
-
-    Rule strategy: ALWAYS includes the MZ magic + uses hash.sha256 as the
-    strongest condition. Falls back to pe.imphash when sha256 is missing.
-    Adds IOCTL byte patterns + PDB path + signer CN as supplementary
-    strings (visible during YARA hits). Designed to compile with the
-    standard `hash` + `pe` YARA modules.
-    """
     hashes = result.get('hashes', {}) or {}
     pe = result.get('pe_extended', {}) or {}
     sig = result.get('signing', {}) or {}
@@ -1885,7 +1645,7 @@ def emit_yara_rule(result: dict, rule_name: str = None) -> str:
         lines.append(f'        archetypes = "{tags}"')
     lines.append("")
     lines.append("    strings:")
-    # Encode IOCTLs as little-endian byte patterns
+                                                  
     have_strings = False
     seen_ioctl_vals = set()
     for i, ic_str in enumerate(ioctls[:8]):
@@ -1931,12 +1691,7 @@ def emit_yara_rule(result: dict, rule_name: str = None) -> str:
     lines.append("}")
     return "\n".join(lines)
 
-
-# ============================================================
-# v2.1 - Driver diff mode
-# ============================================================
 def diff_drivers(r1: dict, r2: dict) -> str:
-    """Field-by-field comparison of two driver scan results."""
     n1 = Path(r1.get('path', r1.get('driver_path', 'driver1'))).name
     n2 = Path(r2.get('path', r2.get('driver_path', 'driver2'))).name
     sep = lambda s: f"  {s}"
@@ -1991,15 +1746,9 @@ def diff_drivers(r1: dict, r2: dict) -> str:
     L.append(mk('tier:',  r1.get('_tier','?'),          r2.get('_tier','?'), 12))
     return "\n".join(L)
 
-
-# ============================================================
-# v2.2/v2.3 - --crawl / --deepcrawl: kernel-driver discovery
-# ============================================================
-# v2.3: expanded known driver locations. The "standard" set covers all
-# places drivers actually live or get extracted on a typical Windows box.
 def _build_default_crawl_roots():
     roots = [
-        # ---- Core Windows driver locations ----
+                                                 
         r"C:\Windows\System32\drivers",
         r"C:\Windows\System32\drivers\UMDF",
         r"C:\Windows\System32\drivers\Wdf",
@@ -2007,7 +1756,7 @@ def _build_default_crawl_roots():
         r"C:\Windows\System32\DriverStore\FileRepository",
         r"C:\Windows\System32\DriverStore\Temp",
         r"C:\Windows\inf",
-        # ---- Vendor installer drops ----
+                                          
         r"C:\Drivers",
         r"C:\Driver",
         r"C:\swsetup",
@@ -2021,17 +1770,17 @@ def _build_default_crawl_roots():
         r"C:\ASUS",
         r"C:\MSI",
         r"C:\Gigabyte",
-        # ---- Program Files trees (vendor kernel components ship here) ----
+                                                                            
         r"C:\Program Files",
         r"C:\Program Files (x86)",
         r"C:\ProgramData",
-        # ---- Recovery + boot ----
+                                   
         r"C:\Windows\WinSxS",
         r"C:\Windows\Temp",
         r"C:\Windows\SoftwareDistribution\Download",
         r"C:\Windows\Panther",
     ]
-    # Per-user paths (variable across machines / user profiles)
+                                                               
     user = os.environ.get('USERPROFILE')
     if user:
         roots += [
@@ -2045,12 +1794,9 @@ def _build_default_crawl_roots():
             roots.append(val)
     return roots
 
-
 DEFAULT_CRAWL_ROOTS = _build_default_crawl_roots()
 
-
 def _enumerate_drive_roots():
-    """Enumerate every logical drive on Windows (A:\\ through Z:\\)."""
     drives = []
     for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
         d = f"{letter}:\\"
@@ -2058,14 +1804,7 @@ def _enumerate_drive_roots():
             drives.append(d)
     return drives
 
-
 def _header_is_kernel_driver(header: bytes) -> bool:
-    """Header-only kernel-driver check (no I/O). Caller supplies the first
-    >= 0x400 bytes. Centralizes the gating logic so quick_is_kernel_driver
-    AND quick_check_and_hash share it.
-
-    Gates: MZ + e_lfanew + PE sig + OPT magic + NATIVE subsys + AEP != 0.
-    """
     if len(header) < 0x80 or header[:2] != b'MZ':
         return False
     try:
@@ -2077,7 +1816,7 @@ def _header_is_kernel_driver(header: bytes) -> bool:
     if header[e_lfanew:e_lfanew + 4] != b'PE\x00\x00':
         return False
     try:
-        opt_off = e_lfanew + 4 + 20  # PE sig + COFF header
+        opt_off = e_lfanew + 4 + 20                        
         if opt_off + 72 > len(header):
             return False
         magic = struct.unpack_from('<H', header, opt_off)[0]
@@ -2089,22 +1828,7 @@ def _header_is_kernel_driver(header: bytes) -> bool:
         return False
     return subsys == 1 and aep != 0
 
-
 def quick_is_kernel_driver(path: str) -> bool:
-    """Fast (header-only) check that a .sys file is a kernel driver.
-
-    Reads only the first 0x400 bytes. Per user spec ("quick check for
-    DriverEntry and that's it"), the bar is minimal:
-      - MZ + valid e_lfanew + PE signature
-      - PE Optional Header magic is PE32 or PE32+
-      - Subsystem == 1 (IMAGE_SUBSYSTEM_NATIVE)
-      - AddressOfEntryPoint != 0 (has a DriverEntry)
-
-    No DLL-bit exclusion: some legit kernel drivers (WDF support DLLs,
-    minifilter helpers like ksapi64_del.sys) have IMAGE_FILE_DLL set.
-
-    Designed to be safe on partial reads, locked files, junctions, etc.
-    """
     try:
         with open(path, 'rb') as f:
             header = f.read(0x400)
@@ -2112,18 +1836,7 @@ def quick_is_kernel_driver(path: str) -> bool:
         return False
     return _header_is_kernel_driver(header)
 
-
 def quick_check_and_hash(path: str):
-    """v2.4: SINGLE-PASS check + SHA256. Returns (is_kernel_driver, sha256_hex).
-
-    Opens the file ONCE: reads the header for the kernel-driver check,
-    short-circuits without hashing if not a driver, otherwise streams the
-    rest through SHA256. ~2x faster than v2.3's quick_check + reopen+read
-    pattern for files larger than 0x400 bytes.
-
-    Returns (False, None) on non-drivers or read errors (caller can
-    distinguish from sha256 success because second element is None).
-    """
     try:
         with open(path, 'rb') as f:
             header = f.read(0x400)
@@ -2140,15 +1853,10 @@ def quick_check_and_hash(path: str):
     except OSError:
         return (False, None)
 
-
 CHECKPOINT_FILENAME = ".scanned_paths.txt"
-SHA256_CACHE_FILENAME = ".sha256_cache.txt"  # filename<TAB>sha256
-
+SHA256_CACHE_FILENAME = ".sha256_cache.txt"                       
 
 def _load_sha256_cache(out_path: Path) -> dict:
-    """Load the SHA256 cache so re-runs don't re-hash existing files.
-    Format: one line per file, '<basename>\\t<sha256_hex>'. Comments (#) ignored.
-    """
     cache_file = out_path / SHA256_CACHE_FILENAME
     cache = {}
     if not cache_file.exists():
@@ -2166,12 +1874,7 @@ def _load_sha256_cache(out_path: Path) -> dict:
         pass
     return cache
 
-
 def _populate_dedup_seen(out_path: Path, verbose: bool = False) -> set:
-    """Build SHA256 dedup set for files already in crawler/. Uses
-    .sha256_cache.txt so subsequent runs don't re-hash. Missing entries
-    are computed once and appended to the cache file.
-    """
     cache = _load_sha256_cache(out_path)
     existing = list(out_path.glob('*.sys'))
     seen = set()
@@ -2216,9 +1919,7 @@ def _populate_dedup_seen(out_path: Path, verbose: bool = False) -> set:
                 pass
     return seen
 
-
 def _append_sha256_cache(out_path: Path, basename: str, sha256_hex: str):
-    """Append a single (basename, sha256) row to the cache file."""
     try:
         with open(out_path / SHA256_CACHE_FILENAME, 'a',
                   encoding='utf-8', errors='replace') as f:
@@ -2226,10 +1927,7 @@ def _append_sha256_cache(out_path: Path, basename: str, sha256_hex: str):
     except OSError:
         pass
 
-
 def _load_checkpoint(out_path: Path) -> set:
-    """Read .scanned_paths.txt and return set of normalized (lowercased,
-    trailing-sep-stripped) directory paths already finished."""
     ckpt = out_path / CHECKPOINT_FILENAME
     completed = set()
     if not ckpt.exists():
@@ -2245,7 +1943,6 @@ def _load_checkpoint(out_path: Path) -> set:
         pass
     return completed
 
-
 def _clear_checkpoint(out_path: Path) -> bool:
     ckpt = out_path / CHECKPOINT_FILENAME
     if ckpt.exists():
@@ -2256,25 +1953,13 @@ def _clear_checkpoint(out_path: Path) -> bool:
             return False
     return False
 
-
 def _norm_dir(d: str) -> str:
     return os.path.normcase(os.path.normpath(d))
-
 
 def crawl_drivers(roots, out_dir: str, max_files: int = 0,
                   verbose: bool = False, progress_every: int = 500,
                   use_checkpoint: bool = True,
                   clear_checkpoint_first: bool = False) -> dict:
-    """Walk `roots`, copy every `.sys` that passes quick_is_kernel_driver
-    to `out_dir`. Dedupes by SHA256 (including any drivers already in out_dir).
-
-    v2.3: Checkpoint file `.scanned_paths.txt` in `out_dir` tracks every
-    directory that's been fully processed. On restart, those dirs are
-    pruned from os.walk descent so partial scans resume without redoing
-    work. Pass `clear_checkpoint_first=True` to wipe the checkpoint.
-
-    Returns a stats dict + the list of copied paths under 'copied_paths'.
-    """
     out_path = Path(out_dir)
     out_path.mkdir(parents=True, exist_ok=True)
 
@@ -2287,7 +1972,6 @@ def crawl_drivers(roots, out_dir: str, max_files: int = 0,
         print(f"  [checkpoint] {len(completed_dirs)} dirs already scanned, "
               f"will skip on descent")
 
-    # v2.4: SHA256 cache so we don't re-hash 1000+ existing drivers per run
     seen_hashes = _populate_dedup_seen(out_path, verbose=verbose)
     if seen_hashes:
         print(f"  [cache] {len(seen_hashes)} existing drivers in dedup set")
@@ -2346,7 +2030,7 @@ def crawl_drivers(roots, out_dir: str, max_files: int = 0,
             except OSError:
                 continue
             for dirpath, subdirs, files in walker:
-                # Prune already-completed subdirs from descent
+                                                              
                 if completed_dirs:
                     subdirs[:] = [
                         d for d in subdirs
@@ -2355,7 +2039,7 @@ def crawl_drivers(roots, out_dir: str, max_files: int = 0,
                 if _norm_dir(dirpath) in completed_dirs:
                     stats['dirs_skipped'] += 1
                     continue
-                # Process files in this directory
+                                                 
                 for fn in files:
                     stats['scanned_files'] += 1
                     if progress_every and stats['scanned_files'] % progress_every == 0:
@@ -2366,15 +2050,14 @@ def crawl_drivers(roots, out_dir: str, max_files: int = 0,
                         continue
                     stats['sys_found'] += 1
                     full = os.path.join(dirpath, fn)
-                    # v2.4: SINGLE-PASS check + SHA256 (was double-read in v2.3)
+                                                                                
                     try:
                         is_drv, h = quick_check_and_hash(full)
                     except Exception:
                         stats['errors'] += 1
                         continue
                     if not is_drv:
-                        # Non-driver, locked file, or partial-read failure.
-                        # Skip silently — we only care about kernel drivers.
+                                                                           
                         continue
                     stats['kernel_drivers'] += 1
                     if h in seen_hashes:
@@ -2387,7 +2070,7 @@ def crawl_drivers(roots, out_dir: str, max_files: int = 0,
                         shutil.copy2(full, dst)
                         stats['copied'] += 1
                         stats['copied_paths'].append(str(dst))
-                        # Append to cache so the next run skips this re-hash
+                                                                            
                         _append_sha256_cache(out_path, dst_name, h)
                         if verbose:
                             print(f"    [copy] {full} -> {dst.name}")
@@ -2398,13 +2081,9 @@ def crawl_drivers(roots, out_dir: str, max_files: int = 0,
                         continue
                     if max_files and stats['copied'] >= max_files:
                         return stats
-                # Mark dir done. Only leaves are marked "fully done" here
-                # — parent dirs become "done" only once we exit the os.walk
-                # for that root naturally. Per-dir granularity is enough:
-                # restart re-walks parents (cheap) but skips processed leaves
-                # (the expensive part).
+                                                                         
                 _mark_dir_done(dirpath)
-            # Mark the root itself done
+                                       
             _mark_dir_done(root)
     finally:
         if ckpt_fh is not None:
@@ -2414,12 +2093,7 @@ def crawl_drivers(roots, out_dir: str, max_files: int = 0,
                 pass
     return stats
 
-
-# ============================================================
-# Authenticode + signtool /kp
-# ============================================================
 def signing_info(path: str) -> dict:
-    """Get-AuthenticodeSignature with subject fallback for UnknownError chains."""
     try:
         cmd = ["powershell.exe", "-NoProfile", "-Command",
                "$s=Get-AuthenticodeSignature -LiteralPath '" + str(path).replace("'", "''") + "'; "
@@ -2442,9 +2116,7 @@ def signing_info(path: str) -> dict:
     except Exception as e:
         return {"error": str(e)}
 
-
 def signtool_kp(path: str) -> dict:
-    """Run signtool /kp /v on driver. Returns dict with verified bool + key fields."""
     candidates = [
         r"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\signtool.exe",
         r"C:\Program Files (x86)\Windows Kits\10\bin\x64\signtool.exe",
@@ -2460,7 +2132,7 @@ def signtool_kp(path: str) -> dict:
         r = subprocess.run([tool, "verify", "/kp", "/v", path],
                            capture_output=True, text=True, timeout=30)
         ok = "Successfully verified" in r.stdout
-        # extract timestamp line
+                                
         ts = ""
         for line in r.stdout.splitlines():
             if "signature is timestamped" in line.lower():
@@ -2474,9 +2146,7 @@ def signtool_kp(path: str) -> dict:
     except Exception as e:
         return {"error": str(e)}
 
-
 def is_burnt(sig_dict: dict) -> tuple:
-    """Return (is_burnt, reason)."""
     thumb = (sig_dict.get("THUMB") or "").upper()
     subj = sig_dict.get("SUBJECT", "")
     for p in BURNT_THUMBS_PREFIX:
@@ -2487,10 +2157,6 @@ def is_burnt(sig_dict: dict) -> tuple:
             return True, f"burnt-signer:{s}"
     return False, ""
 
-
-# ============================================================
-# IDA-driven scanner (v5 logic + deep mode)
-# ============================================================
 SIG_LIST = ['ntddk', 'wdfldr', 'wdf01000', 'fltmgr', 'hal',
             'ndis', 'tcpip', 'vc14_64', 'vc16_64', 'vc14_64_seh',
             'vc16_64_seh', 'libcmt_64', 'vcruntime140_64']
@@ -2501,11 +2167,6 @@ IRP_MJ_OPERATION_END  = 0x80
 FLT_OP_SIZE           = 0x20
 FLT_REG_OP_OFFSET     = 0x10
 
-
-# ============================================================
-# IOCTL decoder (CTL_CODE bits)
-# ============================================================
-# Windows ntddk FILE_DEVICE_* names per WDK ntddk.h
 DEVICE_TYPES = {
     0x00000001: "BEEP",
     0x00000002: "CD_ROM",
@@ -2570,11 +2231,7 @@ DEVICE_TYPES = {
 METHODS = {0: "BUFFERED", 1: "IN_DIRECT", 2: "OUT_DIRECT", 3: "NEITHER"}
 ACCESS_BITS = {0: "ANY", 1: "READ", 2: "WRITE", 3: "READ_WRITE"}
 
-
 def decode_ioctl(code: int) -> dict:
-    """Decode a CTL_CODE-style IOCTL: DEVICE_TYPE | FUNCTION | METHOD | ACCESS.
-    Bits: [31..16]=DeviceType, [15..14]=Access, [13..2]=Function, [1..0]=Method
-    Mask to 32-bit first to strip sign-extension."""
     code = code & 0xFFFFFFFF
     device_type = (code >> 16) & 0xFFFF
     access = (code >> 14) & 0x3
@@ -2589,21 +2246,7 @@ def decode_ioctl(code: int) -> dict:
         "access": ACCESS_BITS.get(access, "?"),
     }
 
-
 def _find_high_ioctl_density_func(min_ioctls=5):
-    """Fallback for WDF-stub drivers (no static MJ14 / no FltRegister):
-    scan every non-library function, score by IOCTL-pattern density,
-    return the top candidate. Useful when WdfIoQueueCreate is loaded
-    dynamically via WdfVersionBind and we can't trace it statically.
-
-    v1.7 scoring: count / (distinct_device_types ** 2).  Real dispatchers
-    use ONE device-type for all IOCTLs (a single DEVICE_OBJECT has one
-    type). Functions with 2+ distinct device_types are usually phantom
-    cmp-imm matches (function-pointer compares, magic values, struct
-    field tests). TdGamepad.sys:
-      - 0x403870 (real): 10 IOCTLs all device_type 0x2A → score 10
-      - 0x412a4a (noise): 29 IOCTLs split 11 of 0x0040 + 18 of 0x0041 → 29/4=7.25
-    """
     import ida_funcs
     best_score = 0.0
     best_ea = None
@@ -2612,9 +2255,9 @@ def _find_high_ioctl_density_func(min_ioctls=5):
         f = ida_funcs.getn_func(i)
         if not f: continue
         if f.flags & ida_funcs.FUNC_LIB: continue
-        # too small to be a real dispatcher
+                                           
         if (f.end_ea - f.start_ea) < 100: continue
-        # too big = probably init/setup, not dispatcher
+                                                       
         if (f.end_ea - f.start_ea) > 0x4000: continue
         ioctls = _enumerate_dispatch_ioctls(f.start_ea, max_depth=1)
         n = len(ioctls)
@@ -2630,10 +2273,7 @@ def _find_high_ioctl_density_func(min_ioctls=5):
         return best_ea, best_ioctls
     return None, set()
 
-
 def _has_wdf_stub_pattern():
-    """Detect WDF-stub drivers: imports WdfVersionBind but NOT static
-    WdfIoQueueCreate (WDF APIs are loaded dynamically into a function table)."""
     has_bind = False
     has_queue = False
     import ida_segment, ida_bytes, ida_name
@@ -2650,38 +2290,18 @@ def _has_wdf_stub_pattern():
             ea = ida_bytes.next_head(ea, seg.end_ea)
     return has_bind and not has_queue
 
-
-# WDF_IO_QUEUE_CONFIG offset of EvtIoDeviceControl callback (KMDF 1.x).
-# Layout: Size(4) DispatchType(4) PowerManaged(4) AllowZeroLen(1) Default(1)
-#         padding(2) EvtIoDefault(8) EvtIoRead(8) EvtIoWrite(8) EvtIoDeviceControl(8)
 WDF_IO_QUEUE_CONFIG_EVTDEVCTL_OFFSET = 0x28
 
-
 def _find_wdf_static_dispatcher():
-    """Static-WDF detection (v1.5).
-
-    For drivers that statically import WdfIoQueueCreate (rather than the
-    dynamic WdfVersionBind stub pattern), trace the PWDF_IO_QUEUE_CONFIG
-    argument (rdx in __fastcall) and read [config + 0x28] = EvtIoDeviceControl.
-
-    Returns (handler_ea, config_ea) on success, (None, None) on failure.
-
-    Strategy per call-site:
-      1. Locate calls to WdfIoQueueCreate (or its thunk).
-      2. Trace rdx (2nd arg = WDF_IO_QUEUE_CONFIG*).
-      3. If config_ea is in a data segment, read qword at config+0x28.
-      4. Otherwise (stack-local config) scan the enclosing function for
-         `mov [rsp+config_offset+0x28], handler` writes.
-    """
     import ida_funcs, ida_bytes, ida_ua, ida_xref, ida_segment, ida_name
-    # Find xref sites for WdfIoQueueCreate import
+                                                 
     sites = _find_import_xrefs('WdfIoQueueCreate')
     real_sites = set()
     for s in sites:
         owner = ida_funcs.get_func(s)
         if owner is None:
             continue
-        # If site is a thunk, follow back to actual callers
+                                                           
         if (owner.end_ea - owner.start_ea) <= 16:
             xb = ida_xref.xrefblk_t()
             ok = xb.first_to(owner.start_ea, 0)
@@ -2693,13 +2313,11 @@ def _find_wdf_static_dispatcher():
             real_sites.add(s)
 
     for site in sorted(real_sites)[:5]:
-        # WdfIoQueueCreate(Device, Config, Attributes, Queue)
-        # __fastcall: rcx=Device, rdx=Config, r8=Attributes, r9=Queue
+                                                             
         config_ea = _trace_arg_back(site, 2)
         if not config_ea:
             continue
-        # Case A: config in static data segment — qword at +0x28 is the
-        # EvtIoDeviceControl pointer (set at compile-time via initializer).
+                                                                       
         for i in range(ida_segment.get_segm_qty()):
             seg = ida_segment.getnseg(i)
             if seg and seg.start_ea <= config_ea < seg.end_ea:
@@ -2708,14 +2326,11 @@ def _find_wdf_static_dispatcher():
                     if cand and ida_funcs.get_func(cand):
                         return cand, config_ea
                 break
-        # Case B: config is a stack frame — scan the enclosing function
-        # for `mov [config+0x28], handler` writes.
+                                                                       
         owner = ida_funcs.get_func(site)
         if owner is None:
             continue
-        # The trace_arg_back already produced a likely [rsp+N] address;
-        # treat it as the local config base. Walk forward from owner.start
-        # and look for memory writes at [base+0x28] form.
+                                                                       
         target_off = config_ea + WDF_IO_QUEUE_CONFIG_EVTDEVCTL_OFFSET
         ea = owner.start_ea
         while ea < owner.end_ea:
@@ -2728,9 +2343,9 @@ def _find_wdf_static_dispatcher():
             if (mnem == 'mov'
                     and op0.type in (ida_ua.o_displ, ida_ua.o_mem)
                     and op1.type == ida_ua.o_reg):
-                # The write target offset matches the EvtIoDeviceControl slot
+                                                                             
                 if op0.addr == target_off or (op0.addr & 0xFFF) == (target_off & 0xFFF):
-                    # Trace the loaded handler via the lea before
+                                                                 
                     scan = ea
                     for _ in range(12):
                         scan = ida_bytes.prev_head(scan, owner.start_ea)
@@ -2748,10 +2363,8 @@ def _find_wdf_static_dispatcher():
             ea = ida_bytes.next_head(ea, owner.end_ea)
     return None, None
 
-
 def _ida_scan(driver_path: str, depth: int = 3, no_flirt: bool = False,
               deep: bool = False, no_decompile: bool = False) -> dict:
-    """Run all IDA-based analysis in a single idalib session."""
     result = {
         'driver': driver_path,
         'modes_resolved': [],
@@ -2795,7 +2408,6 @@ def _ida_scan(driver_path: str, depth: int = 3, no_flirt: bool = False,
             import ida_funcs, ida_bytes, ida_ua, ida_xref, ida_name, ida_idaapi
             import ida_segment, ida_entry, ida_auto, ida_nalt, idc
 
-            # FLIRT
             if not no_flirt:
                 applied = 0
                 for s in SIG_LIST:
@@ -2810,7 +2422,6 @@ def _ida_scan(driver_path: str, depth: int = 3, no_flirt: bool = False,
 
             result['function_count'] = ida_funcs.get_func_qty()
 
-            # Imports + primitive classification
             imports = set()
             for i in range(ida_segment.get_segm_qty()):
                 seg = ida_segment.getnseg(i)
@@ -2834,13 +2445,11 @@ def _ida_scan(driver_path: str, depth: int = 3, no_flirt: bool = False,
                     prims_found.add(cls)
             result['primitives'] = sorted(prims_found)
 
-            # DriverEntry
             de_ea = ida_name.get_name_ea(ida_idaapi.BADADDR, 'DriverEntry')
             if de_ea == ida_idaapi.BADADDR and ida_entry.get_entry_qty() > 0:
                 de_ea = ida_entry.get_entry(ida_entry.get_entry_ordinal(0))
             result['driver_entry'] = hex(de_ea) if de_ea != ida_idaapi.BADADDR else None
 
-            # Strings: PDB path, device names, archetype tagging, SDDL
             STRTYPE_C = getattr(ida_nalt, "STRTYPE_C", 0)
             archs = {k: [] for k in ARCHETYPE_STRINGS}
             for i in range(ida_segment.get_segm_qty()):
@@ -2892,7 +2501,6 @@ def _ida_scan(driver_path: str, depth: int = 3, no_flirt: bool = False,
             if archs_pruned:
                 result['archetype_strings'] = archs_pruned
 
-            # MJ scan — direct (in DriverEntry) + recursive (in callees)
             mj_writes = _scan_mj_writes_recursive(de_ea, max_depth=depth) if de_ea != ida_idaapi.BADADDR else {}
             if mj_writes:
                 result['mj_table_writes'] = {str(k): hex(v) for k, v in mj_writes.items()}
@@ -2905,9 +2513,6 @@ def _ida_scan(driver_path: str, depth: int = 3, no_flirt: bool = False,
                     result['ioctls'] = [hex(i) for i in sorted(ioctls)]
                     result['ioctl_count'] = len(ioctls)
 
-            # v1.5 — Static WDF path: drivers with WdfIoQueueCreate imported
-            # directly (not stub-loaded). Trace EvtIoDeviceControl from the
-            # WDF_IO_QUEUE_CONFIG argument at offset 0x28.
             if not result['mj14_handler']:
                 wdf_handler, wdf_cfg = _find_wdf_static_dispatcher()
                 if wdf_handler:
@@ -2921,15 +2526,6 @@ def _ida_scan(driver_path: str, depth: int = 3, no_flirt: bool = False,
                         result['ioctls'] = [hex(i) for i in sorted(ioctls)]
                         result['ioctl_count'] = len(ioctls)
 
-            # WDF-stub fallback — drivers using dynamic WdfVersionBind (no
-            # static WdfIoQueueCreate import) don't expose MJ14 via standard
-            # paths. Scan all functions for the one with highest IOCTL
-            # pattern density. This covers GameDriverX64 etc.
-            # v1.5 also fires when MJ handler resolved BUT 0 IOCTLs found
-            # AND driver has WDF imports — handles WUDFRd's RdDispatch
-            # reflector pattern where the WDM MJ[14] just forwards to the
-            # WDF queue infrastructure, and the true IOCTL surface is the
-            # EvtIoDeviceControl callback.
             need_stub_fallback = (
                 _has_wdf_stub_pattern()
                 and (not result['mj14_handler'] or result['ioctl_count'] == 0)
@@ -2943,16 +2539,8 @@ def _ida_scan(driver_path: str, depth: int = 3, no_flirt: bool = False,
                     result['ioctls'] = [hex(i) for i in sorted(best_ioctls)]
                     result['ioctl_count'] = len(best_ioctls)
 
-            # Anti-cheat fallback — when MJ[14] is absent but other MJs are
-            # set, the driver may be using MJ_READ / MJ_WRITE / MJ_CREATE
-            # as its command-dispatch surface (common Wellbia / Pingoff /
-            # XignCode pattern). Sniff each candidate for an IOCTL-density
-            # signature and pick the strongest. If no IOCTL multiplexer is
-            # found but a magic-cookie gate IS present in the candidate,
-            # still report the MJ as resolved with a 'magic-cookie single
-            # command' annotation (xhunter1.sys pattern).
             if not result['mj14_handler'] and mj_writes:
-                AC_FALLBACK_MJ = (3, 4, 1, 0)  # READ, WRITE, CREATE_NP, CREATE
+                AC_FALLBACK_MJ = (3, 4, 1, 0)                                  
                 best_ea, best_ioctls = None, set()
                 for mj_idx in AC_FALLBACK_MJ:
                     if mj_idx not in mj_writes:
@@ -2971,8 +2559,7 @@ def _ida_scan(driver_path: str, depth: int = 3, no_flirt: bool = False,
                     result['ioctls'] = [hex(i) for i in sorted(best_ioctls)]
                     result['ioctl_count'] = len(best_ioctls)
                 else:
-                    # No IOCTL multiplexer — check for magic-cookie gate in
-                    # any candidate. If found, report it as ac_alt_mj_single.
+                                                                           
                     for mj_idx in AC_FALLBACK_MJ:
                         if mj_idx not in mj_writes:
                             continue
@@ -2987,7 +2574,6 @@ def _ida_scan(driver_path: str, depth: int = 3, no_flirt: bool = False,
                             result['gate_status'] = '|'.join(gates)
                             break
 
-            # Minifilter
             mf_info = _walk_minifilter()
             if mf_info:
                 result['minifilter'] = mf_info
@@ -3000,12 +2586,10 @@ def _ida_scan(driver_path: str, depth: int = 3, no_flirt: bool = False,
                     result['ioctls'] = sorted(set(result['ioctls']))
                     result['ioctl_count'] = len(result['ioctls'])
 
-            # Process callback targets
             pcb = _process_callback_targets()
             if pcb:
                 result['process_callback_targets'] = pcb
 
-            # Gate detection (basic): check dispatcher for PID/cookie/PEB patterns
             if result['mj14_handler']:
                 gates = _detect_gates(int(result['mj14_handler'], 16), max_depth=depth)
                 result['gates_detected'] = gates
@@ -3017,7 +2601,6 @@ def _ida_scan(driver_path: str, depth: int = 3, no_flirt: bool = False,
                     else:
                         result['gate_status'] = 'NONE'
 
-            # Deep mode — per-IOCTL classification
             if deep and result['mj14_handler'] and not no_decompile:
                 result['per_ioctl_classification'] = _classify_per_ioctl(
                     int(result['mj14_handler'], 16),
@@ -3035,45 +2618,25 @@ def _ida_scan(driver_path: str, depth: int = 3, no_flirt: bool = False,
     result['analyze_time_s'] = round(time.time() - t0, 2)
     return result
 
-
-# ============================================================
-# IDA helpers (only available after idapro.open_database)
-# ============================================================
 def _is_32bit_image():
-    """Detect 32-bit driver from IDA inf."""
     try:
         import ida_ida
         return not ida_ida.inf_is_64bit()
     except Exception:
         return False
 
-
 def _scan_mj_writes_recursive(start_func_ea, max_depth=3):
-    """Recursive MajorFunction[N] array-write scan.
-
-    64-bit: MJ table at DriverObject+0x70, stride 8.
-    32-bit: MJ table at DriverObject+0x38, stride 4. (DRIVER_OBJECT changes
-            layout between archs — Flags at 0x4 in 32, 0x8 in 64; etc.)
-    We try both layouts so 32-bit drivers don't return unresolved."""
     import ida_funcs, ida_bytes, ida_ua, ida_idaapi
     is32 = _is_32bit_image()
-    # Layout per arch: (base_offset, stride, max_offset).
-    # 64-bit: DriverObject->MajorFunction[0] at +0x70, ptr stride 8.
-    # 32-bit: DriverObject->MajorFunction[0] at +0x38, ptr stride 4.
-    # IMPORTANT: never fall back to the other layout — 64-bit offset 0x68
-    # is DriverUnload which would alias to "MJ[12]" under the 32-bit
-    # layout, producing a false positive (and corrupting the score).
+                                                         
     if is32:
         layouts = [(0x38, 4, 0x80)]
     else:
         layouts = [(0x70, 8, 0x100)]
 
     found = {}
-    # Rep-stos detections are buffered and applied LAST so that direct
-    # mov-writes (which often OVERRIDE specific MJ slots after a generic
-    # `rep stos` fill — PCTcore64 sets MJ[0..15]=wrapper via rep stos
-    # then overrides MJ[14]=real_dispatcher via direct mov) win.
-    pending_repstos = []  # list of (handler_ea, count)
+                                                                      
+    pending_repstos = []                               
     visited = set()
     queue = deque([(start_func_ea, 0)])
     while queue:
@@ -3093,7 +2656,7 @@ def _scan_mj_writes_recursive(start_func_ea, max_depth=3):
             op0 = insn.ops[0]
             if mnem == 'mov' and op0.type == ida_ua.o_displ:
                 off = op0.addr
-                # Try each layout
+                                 
                 for base, stride, max_off in layouts:
                     if base <= off <= max_off and (off - base) % stride == 0:
                         mj_idx = (off - base) // stride
@@ -3115,18 +2678,8 @@ def _scan_mj_writes_recursive(start_func_ea, max_depth=3):
                                             if mj_idx not in found:
                                                 found[mj_idx] = handler
                                         break
-                        break  # don't try other layouts for this insn
-            # v1.5: `rep stosq` MJ-array fill (ASTRA64-style "register one
-            # handler for all major functions") followed by per-MJ overrides.
-            # Pattern (64-bit):
-            #   lea  rdi, [DriverObject+0x70]   ; dst = &MJ[0]    REQUIRED
-            #   lea  rax, handler               ; src             REQUIRED
-            #   mov  ecx, N                     ; count (qwords)
-            #   rep stosq                       ; fill MJ[0..N-1] = handler
-            # STRICT match: rdi must come from `lea rdi, [reg+MJ_BASE]` where
-            # MJ_BASE is exactly 0x70 (64-bit) or 0x38 (32-bit). Otherwise
-            # this rep stos is unrelated memory clear (e.g. WUDFRd zeroes
-            # a buffer that triggers false-positive MJ writes).
+                        break                                         
+                                                                          
             expected_base = 0x38 if is32 else 0x70
             if mnem.startswith('stos'):
                 lea_rax_handler = None
@@ -3141,22 +2694,19 @@ def _scan_mj_writes_recursive(start_func_ea, max_depth=3):
                     pmn = pi.get_canon_mnem()
                     if pmn == 'lea' and pi.ops[0].type == ida_ua.o_reg:
                         rname = pi.ops[0].reg
-                        if rname == 7:  # rdi
-                            # MUST be lea rdi, [reg+expected_base] (o_displ)
+                        if rname == 7:       
+                                                                            
                             if (pi.ops[1].type == ida_ua.o_displ
                                     and pi.ops[1].addr == expected_base):
                                 rdi_at_mj_base = True
-                        elif rname == 0:  # rax = handler
+                        elif rname == 0:                 
                             if pi.ops[1].type == ida_ua.o_mem:
                                 lea_rax_handler = pi.ops[1].addr or pi.ops[1].value
                     elif pmn == 'mov' and pi.ops[0].type == ida_ua.o_reg:
-                        # mov ecx, N → count
+                                            
                         if pi.ops[0].reg == 1 and pi.ops[1].type == ida_ua.o_imm:
                             count_imm = pi.ops[1].value
-                # Only buffer if all three pieces aligned + plausible count
-                # (MJ array has at most 28 entries; require 5..28 to avoid
-                # rep stos of small struct fields). Applied AFTER all
-                # direct-mov writes complete so explicit overrides win.
+                                                                           
                 if (lea_rax_handler and rdi_at_mj_base
                         and count_imm and 5 <= count_imm <= 28
                         and ida_funcs.get_func(lea_rax_handler)):
@@ -3166,28 +2716,20 @@ def _scan_mj_writes_recursive(start_func_ea, max_depth=3):
                 callee = insn.ops[0].addr or insn.ops[0].value
                 if callee and ida_funcs.get_func(callee) and callee not in visited:
                     queue.append((callee, d + 1))
-            # v1.5: follow JMPs as well. MSVC /GS security-cookie init stubs
-            # end in `jmp real_driver_entry`. Tail-call optimization also
-            # turns `call X; ret` into `jmp X`. Walk those too.
+                                                                            
             if mnem == 'jmp' and d < max_depth:
                 target = insn.ops[0].addr or insn.ops[0].value
                 if target and ida_funcs.get_func(target) and target not in visited:
                     queue.append((target, d + 1))
             ea = ida_bytes.next_head(ea, f.end_ea)
 
-    # Apply buffered rep-stos fills only to slots not already taken by
-    # direct mov writes. This way an explicit `mov [obj+0xE0], 0x158cc`
-    # (MJ[14]=real_dispatcher) wins over a generic `rep stos` fill that
-    # sets every MJ to the same wrapper (PCTcore64 + WUDFRd pattern).
     for handler_ea, count in pending_repstos:
         for mj_slot in range(min(count, 16)):
             if mj_slot not in found:
                 found[mj_slot] = handler_ea
     return found
 
-
 def _is_mj14_in_func(func_ea, mj_idx, handler_ea):
-    """Check whether MJ[mj_idx]=handler write is directly inside func_ea (not a callee)."""
     import ida_funcs, ida_bytes, ida_ua
     f = ida_funcs.get_func(func_ea)
     if not f:
@@ -3204,30 +2746,7 @@ def _is_mj14_in_func(func_ea, mj_idx, handler_ea):
         ea = ida_bytes.next_head(ea, f.end_ea)
     return False
 
-
 def _looks_like_ioctl(val: int) -> bool:
-    """Heuristic IOCTL filter.
-
-    A real CTL_CODE has structure: [device_type:16] [access:2] [function:12] [method:2]
-    Filter out values that don't look IOCTL-shaped:
-      * device_type == 0 (BEEP=0 not used for IOCTLs)
-      * device_type == 0xFFFF (sentinel)
-      * device_type in 0x003C..0x7FFF (Microsoft-reserved middle range — v2.5)
-      * function == 0 (CTL_CODE() never generates function 0)
-      * value < 0x10000 (no device type)
-      * NTSTATUS-looking values in 0xC0000000..0xC07FFFFF range (well-known
-        facility 0-7 errors). Vendor IOCTLs at device_type >= 0xC080 are
-        kept — e.g. gdrv.sys (Gigabyte CVE-2018-19320) uses 0xC3500xxx.
-      * sentinel values like 0xFFFFFFFF, 0xFFFFFFFE, 0xFFFFFF00, 0xFFFFF000
-        (used as -1, -2, MAXULONG-aligned)
-
-    v2.5 — device_type 0x003C..0x7FFF is Microsoft-reserved per ntddk; no
-    legitimate vendor IOCTL uses it. The biased-switch fallback (v1.7+)
-    already filters those at emission, but this shape-filter catches
-    phantom values from non-jumptable paths (lone leaves, raw byte scans).
-    Standard ntddk file-device types are 0x0001-0x003B; OEM-custom range
-    is 0x8000-0xFFFE.
-    """
     val &= 0xFFFFFFFF
     if val < 0x10000:
         return False
@@ -3237,49 +2756,25 @@ def _looks_like_ioctl(val: int) -> bool:
         return False
     if function == 0:
         return False
-    # v2.5: Microsoft-reserved middle range — neither ntddk nor OEM custom.
-    # Real vendor IOCTLs land in 0x0001-0x003B (standard) or 0x8000-0xFFFE
-    # (OEM custom). Values whose device_type falls in 0x003C-0x7FFF are
-    # almost certainly arithmetic constants, not IOCTLs.
+                                                                           
     if 0x003C <= device_type <= 0x7FFF:
         return False
-    # NTSTATUS error range — TIGHTENED in v1.5. Previously rejected the
-    # full 0xC0000000-0xCFFFFFFF range which incorrectly dropped legit
-    # vendor IOCTLs at device_type 0xC100+. Now only reject the standard
-    # facility 0-7 NTSTATUS errors (0xC0000000-0xC07FFFFF).
+                                                                       
     if 0xC0000000 <= val <= 0xC07FFFFF:
         return False
-    # Sentinel patterns: high-byte 0xFF + low bits zero (e.g. 0xFFFFF000)
+                                                                         
     if (val & 0xFF000000) == 0xFF000000 and (val & 0xFFF) == 0:
         return False
     return True
 
-
 _JT_CASE_RE = re.compile(r'cases?\s+([\-\d,\s]+)')
 _JT_TOKEN_RE = re.compile(r'(-?\d+)(?:-(-?\d+))?')
 
-
 def _extract_jumptable_cases_from_line(line: str):
-    """Parse IDA-tagged switch cases from a disasm line.
-
-    CRITICAL: IDA distinguishes two annotation forms (v1.6 fix):
-
-    1. Master `ja def_XXX ; jumptable XXX default case, cases A,B,C...` —
-       these cases go to the DEFAULT handler (typically returns
-       STATUS_INVALID_DEVICE_REQUEST). They are REJECTED IOCTLs, NOT
-       valid IOCTL surface. RTCore64 has 67 default-cases out of 85
-       total in the switch.
-
-    2. Per-handler `; jumptable XXX case -K` or `cases -A,-B` on the
-       FIRST instruction of each case handler — these are the
-       EXPLICITLY HANDLED cases (real IOCTLs).
-
-    We parse only form (2). Lines containing "default case" are SKIPPED.
-    """
     out = set()
     if 'case' not in line:
         return out
-    # SKIP master "default case" lines — those list rejected IOCTLs
+                                                                   
     if 'default case' in line:
         return out
     m = _JT_CASE_RE.search(line)
@@ -3310,35 +2805,16 @@ def _extract_jumptable_cases_from_line(line: str):
             continue
     return out
 
-
 def _enumerate_dispatch_ioctls(handler_ea, max_depth=3):
-    """Walk dispatcher tree. IOCTLs are masked to 32 bits to strip
-    sign-extension artifacts (cmp ecx, 0xa0400f58 reads as -1606391464).
-
-    v1.4: also extracts IDA-tagged switch-cases (RTCore64 / biased-bias-add
-    pattern) and detects the `add reg, BIAS; cmp reg, MAX; ja` pattern.
-
-    v1.8: post-filter depth >= 1 emissions by device_type homogeneity.
-    A real dispatcher serves ONE DEVICE_OBJECT with ONE DeviceType — sub-
-    handlers reached via call/jmp recursion may have additional cmp+jcc
-    patterns against sub-command values, magic cookies, or struct fields
-    that look like IOCTLs in DIFFERENT device_types. cpuz-1.0.4.1.sys
-    was emitting 254 phantoms in device_type 0xff00 alongside its 35
-    real IOCTLs in 0x9c40. Strategy: collect emissions tagged with
-    their depth; after the BFS, keep depth-0 emissions verbatim plus
-    only those depth>=1 emissions whose device_type appeared at depth 0.
-    """
     import ida_funcs, ida_bytes, ida_ua, ida_xref, ida_lines
     visited = set()
     queue = deque([(handler_ea, 0)])
-    # Track min-depth at which each value was emitted, so v1.8 post-
-    # filter can drop depth>=1 emissions whose device_type was never
-    # seen at depth 0.
+                                                                    
     all_ioctls = set()
-    ioctl_min_depth = {}  # value -> min depth observed
+    ioctl_min_depth = {}                               
 
     def _emit(v, _depth_ref=None):
-        # _depth_ref is set per outer-loop iteration via the closure d
+                                                                      
         all_ioctls.add(v)
         cur = ioctl_min_depth.get(v)
         if cur is None or _depth_ref < cur:
@@ -3353,34 +2829,21 @@ def _enumerate_dispatch_ioctls(handler_ea, max_depth=3):
         if not f or (f.flags & ida_funcs.FUNC_LIB):
             continue
         ea = f.start_ea
-        # Track `add reg, IMM_BIAS` for biased-switch detection.
-        # Map reg_id -> bias_imm (always non-zero, treated as 32-bit signed).
+                                                                
         reg_bias = {}
         running_sum = None
-        # NO instruction count cap — bound by f.end_ea. Old 350-cap clipped
-        # large dispatchers like AsIO3_64 (817 insns) at half-coverage.
-        # Safety cap 20000 catches infinite-loop pathology only.
+                                                                           
         count = 0
-        # Conditional jumps that may follow a comparison and indicate IOCTL
-        # match (include unsigned-compare for MSVC switch range-checks).
+                                                                           
         COND_JUMPS = {'jz', 'jnz', 'je', 'jne', 'ja', 'jae', 'jb', 'jbe'}
-        # v2.1.1: SET-byte equality variants. MSVC sometimes materializes
-        # the comparison result into a byte register instead of branching
-        # (compiler optimization for switch lowering with multiple cases
-        # routing to the same code). aswSP.sys uses `cmp ebx, IMM32; setnz
-        # dl; jmp ...` for IOCTL 0xB2D60120 / 0xB2D60128 — these were missed
-        # in v2.1 because only jcc was accepted as a valid look-ahead.
+                                                                         
         SET_EQ = {'setz', 'sete', 'setnz', 'setne'}
-        # v2.4: CMOV equality variants. Same flag semantics — MSVC's
-        # branchless switch lowering may emit `cmp r, IMM32; cmovz rax, rcx`
-        # to select a value depending on the equality result. Add to the
-        # accepted look-ahead so we don't miss those IOCTLs either.
+                                                                    
         CMOV_EQ = {'cmovz', 'cmove', 'cmovnz', 'cmovne'}
-        # Convenience: anything that signals "the prior cmp was tested"
+                                                                       
         EQ_SIGNAL = COND_JUMPS | SET_EQ | CMOV_EQ
-        # Register-to-imm tracker for the `mov reg, IMM; cmp r2, reg; jcc`
-        # pattern (MSVC sometimes loads IMM into a reg before reg-reg cmp).
-        reg_imm = {}   # reg_id -> imm32 (most-recent)
+                                                                          
+        reg_imm = {}                                  
         while ea < f.end_ea and count < 20000:
             count += 1
             insn = ida_ua.insn_t()
@@ -3388,7 +2851,6 @@ def _enumerate_dispatch_ioctls(handler_ea, max_depth=3):
                 ea = ida_bytes.next_head(ea, f.end_ea); continue
             mnem = insn.get_canon_mnem()
 
-            # Track mov reg, IMM32 for later reg-reg compares
             if mnem == 'mov':
                 op0 = insn.ops[0]
                 op1 = insn.ops[1]
@@ -3396,16 +2858,10 @@ def _enumerate_dispatch_ioctls(handler_ea, max_depth=3):
                     v = op1.value & 0xFFFFFFFF
                     reg_imm[op0.reg] = v
                 elif op0.type == ida_ua.o_reg:
-                    # reg overwritten by non-imm — invalidate the tracked imm
+                                                                             
                     reg_imm.pop(op0.reg, None)
                     reg_bias.pop(op0.reg, None)
 
-            # Track biased-switch pattern: `add reg, IMM_BIAS` (MSVC switch
-            # lowering: eax = ioctl + bias, then cmp eax, MAX_INDEX, ja default).
-            # The IOCTL base is (-bias) & 0xFFFFFFFF.
-            # v1.8: require IDA's `; switch N cases` annotation on the same
-            # line — otherwise `add reg, IMM` could be any integer math
-            # (cpuz has `add eax, 0xFFFFFF` for value scaling, not a switch).
             if mnem == 'add':
                 op0 = insn.ops[0]
                 op1 = insn.ops[1]
@@ -3416,11 +2872,6 @@ def _enumerate_dispatch_ioctls(handler_ea, max_depth=3):
                         if 'switch ' in add_line and ' cases' in add_line:
                             reg_bias[op0.reg] = bias
 
-            # Jump-table-comment harvest: walk every instruction looking
-            # for per-handler `case X` tags (NOT the master "default case"
-            # list which contains REJECTED cases — v1.6 fix).
-            # Depth-restricted to 0 — sub-command switches in case handlers
-            # are not IOCTLs.
             if d == 0:
                 line = ida_lines.tag_remove(ida_lines.generate_disasm_line(ea, 0) or "")
                 if 'jumptable' in line and 'default case' not in line:
@@ -3441,34 +2892,20 @@ def _enumerate_dispatch_ioctls(handler_ea, max_depth=3):
                 ne = ida_bytes.next_head(ea, f.end_ea)
                 ni = ida_ua.insn_t()
                 next_mnem = ni.get_canon_mnem() if ida_ua.decode_insn(ni, ne) else ''
-                # v2.4: accept jcc + setcc + cmovcc equality variants
+                                                                     
                 has_cj = next_mnem in EQ_SIGNAL
-                # Biased-switch pattern: prior `add reg, BIAS` then `cmp reg, MAX_INDEX`.
-                # IOCTL_BASE = (-BIAS) & 0xFFFFFFFF.
-                # IMPORTANT: only emit the FULL range as a fallback when IDA
-                # did NOT tag the jumptable cases (those are authoritative —
-                # the byte-index table filters which values are real cases).
+                                                                                         
                 op0 = insn.ops[0]
                 if (op0.type == ida_ua.o_reg
                         and op0.reg in reg_bias
                         and has_cj
                         and val < 0x10000):
-                    # Peek at the jcc line: if IDA already annotated cases,
-                    # the jumptable harvester (running per-instruction above)
-                    # has the exact set — skip the wide range fallback.
+                                                                           
                     nj_line = ida_lines.tag_remove(ida_lines.generate_disasm_line(ne, 0) or "")
                     if 'cases' not in nj_line and 'jumptable' not in nj_line:
                         bias = reg_bias[op0.reg]
                         base = (-bias) & 0xFFFFFFFF
-                        # v1.7: require BASE to land in a legit IOCTL device-type
-                        # range. Per Microsoft convention:
-                        #   0x0001..0x003B = standard ntddk FILE_DEVICE_*
-                        #   0x003C..0x7FFF = RESERVED for Microsoft (phantom)
-                        #   0x8000..0xFFFE = OEM custom
-                        # Reject the reserved middle range. TdGamepad has an
-                        # `add reg, 0xC00000C0` (NTSTATUS error build) that
-                        # would otherwise enumerate 256 phantom IOCTLs in the
-                        # 0x3FFFFFXX (device_type 0x3FFF) reserved range.
+                                                                                 
                         base_dev_type = (base >> 16) & 0xFFFF
                         ranges_ok = (
                             1 <= base_dev_type <= 0x3B
@@ -3489,10 +2926,7 @@ def _enumerate_dispatch_ioctls(handler_ea, max_depth=3):
                     if _looks_like_ioctl(val_m):
                         _emit(val_m, d)
             elif mnem == 'cmp':
-                # reg-reg cmp with one operand holding a tracked IMM:
-                # this is an IOCTL match only if EQUALITY-jcc (jz/je) follows
-                # within the next few jumps. Plain ja/jbe-only is a MSVC
-                # binary-search range pivot, not an IOCTL.
+                                                                     
                 op0 = insn.ops[0]
                 op1 = insn.ops[1]
                 tracked_imm = None
@@ -3500,8 +2934,7 @@ def _enumerate_dispatch_ioctls(handler_ea, max_depth=3):
                     if op.type == ida_ua.o_reg and op.reg in reg_imm:
                         tracked_imm = reg_imm[op.reg]; break
                 if tracked_imm is not None:
-                    # Look ahead up to 4 instructions for an equality signal:
-                    # v2.1.1 jcc+setcc, v2.4 also cmovcc.
+                                                                             
                     has_eq_jcc = False
                     look_ea = ea
                     for _ in range(4):
@@ -3510,15 +2943,13 @@ def _enumerate_dispatch_ioctls(handler_ea, max_depth=3):
                         ji = ida_ua.insn_t()
                         if not ida_ua.decode_insn(ji, look_ea): break
                         jm = ji.get_canon_mnem()
-                        # Only the EQUALITY half of each family (jz/setz/cmovz +
-                        # their inverses). Range pivots (ja/jbe) come from the
-                        # outer biased-switch path, not this reg-imm tracker.
+                                                                                
                         if jm in ('jz', 'je', 'jnz', 'jne') or jm in SET_EQ or jm in CMOV_EQ:
                             has_eq_jcc = True; break
-                        # stop look-ahead at any non-conditional control flow
+                                                                             
                         if jm in ('call', 'retn', 'ret', 'jmp'):
                             break
-                        # also stop if we see another cmp (next dispatch case)
+                                                                              
                         if jm == 'cmp':
                             break
                     if has_eq_jcc and _looks_like_ioctl(tracked_imm):
@@ -3538,9 +2969,7 @@ def _enumerate_dispatch_ioctls(handler_ea, max_depth=3):
                         if tgt and not (tgt.flags & ida_funcs.FUNC_LIB):
                             queue.append((xb.to, d + 1))
                 ok = xb.next_from()
-    # v1.8 post-filter: any emission at depth >= 1 whose device_type was
-    # never observed at depth 0 is treated as a sub-handler phantom (sub-
-    # command compares, magic cookies, struct fields).
+                                                                        
     dts_at_zero = {(v >> 16) & 0xFFFF for v, md in ioctl_min_depth.items() if md == 0}
     if dts_at_zero:
         all_ioctls = {
@@ -3549,7 +2978,6 @@ def _enumerate_dispatch_ioctls(handler_ea, max_depth=3):
             or ((v >> 16) & 0xFFFF) in dts_at_zero
         }
     return all_ioctls
-
 
 def _walk_minifilter():
     import ida_funcs, ida_bytes, ida_ua, ida_xref, ida_name, ida_idaapi, ida_segment
@@ -3561,7 +2989,7 @@ def _walk_minifilter():
             continue
         owner_ea = owner.start_ea
         if (owner.end_ea - owner.start_ea) <= 16:
-            # thunk — find callers
+                                  
             xb = ida_xref.xrefblk_t()
             ok = xb.first_to(owner_ea, 0)
             while ok:
@@ -3600,7 +3028,6 @@ def _walk_minifilter():
         })
     return info if info else None
 
-
 def _walk_flt_op_reg(op_table_ea, max_entries=64):
     import ida_bytes
     entries = []
@@ -3621,7 +3048,6 @@ def _walk_flt_op_reg(op_table_ea, max_entries=64):
             break
         ea += FLT_OP_SIZE
     return entries
-
 
 def _process_callback_targets():
     import ida_funcs, ida_xref
@@ -3647,7 +3073,6 @@ def _process_callback_targets():
             out.append({'call_site': hex(s), 'callback_ea': hex(cb)})
     return out or None
 
-
 def _find_import_xrefs(name):
     import ida_segment, ida_bytes, ida_name, ida_xref, ida_funcs
     sites = []
@@ -3668,7 +3093,6 @@ def _find_import_xrefs(name):
                         ok = xb.next_to()
             ea = ida_bytes.next_head(ea, seg.end_ea)
     return sites
-
 
 def _trace_arg_back(call_ea, arg_reg_id, max_back=60):
     import ida_bytes, ida_ua, ida_idaapi
@@ -3691,24 +3115,13 @@ def _trace_arg_back(call_ea, arg_reg_id, max_back=60):
                 return target
     return None
 
-
 def _detect_gates(handler_ea, max_depth=3):
-    """Detect gate archetypes in dispatcher tree:
-
-    - PID_CHECK       — PsGetCurrentProcessId / PsGetProcessId called
-    - MODULE_PRESENCE — PsGetProcessPeb + PEB.Ldr walks
-    - STRING_COMPARE  — RtlInitUnicodeString + RtlCompareUnicodeString
-    - MAGIC_COOKIE    — cmp dword [mem-disp], imm32 with high entropy (looks
-                        like *user_buf == 0xDEADBEEFCAFE pattern)
-    - TRUST_DB_NULL   — multiple cmp [global], 0 + jz patterns (engine-not-init)
-    - ZW_QUERY_TOKEN  — ZwQueryInformationToken (privilege check)
-    """
     import ida_funcs, ida_bytes, ida_ua, ida_xref, ida_name
     visited = set()
     queue = deque([(handler_ea, 0)])
     gates = set()
     magic_cookie_hits = 0
-    magic_cookie_hi_entropy_hits = 0  # ones with full 4-byte entropy
+    magic_cookie_hi_entropy_hits = 0                                 
     null_check_hits = 0
     rtl_init_calls = 0
     rtl_cmp_calls = 0
@@ -3727,7 +3140,7 @@ def _detect_gates(handler_ea, max_depth=3):
             if not ida_ua.decode_insn(insn, ea):
                 ea = ida_bytes.next_head(ea, f.end_ea); continue
             mnem = insn.get_canon_mnem()
-            # Function-name based gates
+                                       
             if mnem == 'call':
                 callee = insn.ops[0].addr or insn.ops[0].value
                 nm = (ida_name.get_name(callee) or '').lstrip('_').replace('imp_', '').lstrip('_')
@@ -3744,39 +3157,26 @@ def _detect_gates(handler_ea, max_depth=3):
                     gates.add('TOKEN_CHECK')
                 if d < max_depth and callee and ida_funcs.get_func(callee) and callee not in visited:
                     queue.append((callee, d + 1))
-            # cmp [user_buf+N], imm32  pattern (magic cookie check)
+                                                                   
             elif mnem == 'cmp':
                 op0 = insn.ops[0]
                 op1 = insn.ops[1]
                 if op0.type == ida_ua.o_displ and op1.type == ida_ua.o_imm:
                     val = op1.value & 0xFFFFFFFF
                     displ = op0.addr & 0xFFFFFFFF
-                    # Magic-cookie heuristic — must be ALL of:
-                    #   1. imm32 in 0x10000..0xBFFFFFFE
-                    #      (exclude NTSTATUS values 0xC0000000+ and 0x80000000+
-                    #       and -1)
-                    #   2. cmp displacement is small (<= 0x100) — user buffer
-                    #      offsets, not large kernel-struct fields like
-                    #      Irp.IoStatus.Information or device-extension at 0x200+
-                    #   3. not all-zero low bytes (true magic cookies have
-                    #      mixed entropy)
+                                                              
                     if (0x10000 <= val < 0x80000000
                             and displ <= 0x100
                             and (val & 0xFFFF) != 0):
                         magic_cookie_hits += 1
-                        # High-entropy: top byte and bottom byte both
-                        # non-zero (true 4-byte random cookie like
-                        # 0x345821AB, not aligned constant 0xAABBCC00).
+                                                                     
                         if (val & 0xFF) != 0 and (val >> 24) != 0:
                             magic_cookie_hi_entropy_hits += 1
-                # cmp [global], 0  pattern (trust-DB null check)
+                                                                
                 if op0.type == ida_ua.o_mem and op1.type == ida_ua.o_imm and op1.value == 0:
                     null_check_hits += 1
             ea = ida_bytes.next_head(ea, f.end_ea)
 
-    # Two looser hits, OR one strong (full-entropy 4-byte) hit. The latter
-    # catches single-command-surface AC drivers like xhunter1 whose only
-    # input gate is one fixed magic 0x345821AB at [buf+4].
     if magic_cookie_hits >= 2 or magic_cookie_hi_entropy_hits >= 1:
         gates.add('MAGIC_COOKIE')
     if null_check_hits >= 3:
@@ -3785,32 +3185,12 @@ def _detect_gates(handler_ea, max_depth=3):
         gates.add('STRING_COMPARE')
     return sorted(gates)
 
-
-# v2.5: deep-mode equality look-ahead.
-# JZ_TAKEN = handler is the JUMP TARGET (cmp; jz handler)
-# JZ_FALLTHROUGH = handler is the FALL-THROUGH (cmp; jnz error_path; handler...)
-# SET / CMOV: handler is fall-through (instruction materializes flag into reg)
 _DEEP_JZ_TAKEN = {'jz', 'je'}
 _DEEP_JZ_FALLTHROUGH = {'jnz', 'jne'}
 _DEEP_SET_EQ = {'setz', 'sete', 'setnz', 'setne'}
 _DEEP_CMOV_EQ = {'cmovz', 'cmove', 'cmovnz', 'cmovne'}
 
-
 def _classify_per_ioctl(dispatcher_ea, ioctls_list):
-    """For each IOCTL, find the handler EA via cmp + jz/setcc/cmovcc pattern,
-    decompile it, and classify by detected primitives in its callees.
-
-    v2.5: accept setcc/cmovcc as equality-signal in addition to jcc — matches
-    the v2.1.1/v2.4 fix in the IOCTL extractor (_enumerate_dispatch_ioctls)
-    so that --deep per_ioctl_classification covers the same dispatchers.
-    Without this, aswSP would show ioctl_count=37 but
-    len(per_ioctl_classification)=35 because the 2 setcc-gated handlers
-    (0xB2D60120 / 0xB2D60128) couldn't be resolved.
-
-    For setcc/cmovcc hits the "handler EA" is the fall-through path. We
-    walk forward to the next control-flow break (call / jmp / ret / next-cmp)
-    and use that EA as the handler branch.
-    """
     import ida_funcs, ida_bytes, ida_ua, ida_xref, ida_name
     try:
         import ida_hexrays
@@ -3821,8 +3201,7 @@ def _classify_per_ioctl(dispatcher_ea, ioctls_list):
     f = ida_funcs.get_func(dispatcher_ea)
     if not f:
         return None
-    # Map IOCTL -> handler_ea via cmp + (jz/setz/cmovz) patterns. No step
-    # cap (the v1.0 logic walked uncapped until the next cmp/mov/end_ea).
+                                                                         
     ioctl_handlers = {}
     ea = f.start_ea
     while ea < f.end_ea:
@@ -3837,35 +3216,29 @@ def _classify_per_ioctl(dispatcher_ea, ioctls_list):
                         if not ida_ua.decode_insn(ji, ne):
                             break
                         jmn = ji.get_canon_mnem()
-                        # Primary: jz/je -- handler is the JUMP TARGET
+                                                                      
                         if jmn in _DEEP_JZ_TAKEN:
                             tgt = ji.ops[0].addr or ji.ops[0].value
                             if tgt:
                                 ioctl_handlers[hex(val32)] = hex(tgt)
                             break
-                        # v2.5: jnz/jne -- handler is the FALL-THROUGH.
-                        # Pattern: cmp ebx, IMM; jnz error_path; handler...
-                        # Resolves 4 of the 6-IOCTL deep-mode gap on aswSP.
+                                                                       
                         if jmn in _DEEP_JZ_FALLTHROUGH:
                             after = ida_bytes.next_head(ne, f.end_ea)
                             if after < f.end_ea:
                                 ioctl_handlers[hex(val32)] = hex(after)
                             break
-                        # v2.5: setcc / cmovcc materialize ZF into a byte
-                        # or do a conditional move. The "handler" path is
-                        # the fall-through; record the EA after the setcc
-                        # itself so _classify_handler walks the right block.
+                                                                         
                         if jmn in _DEEP_SET_EQ or jmn in _DEEP_CMOV_EQ:
                             after = ida_bytes.next_head(ne, f.end_ea)
                             if after < f.end_ea:
                                 ioctl_handlers[hex(val32)] = hex(after)
                             break
                         if jmn in ('cmp', 'mov'):
-                            break  # something else, give up
+                            break                           
                         ne = ida_bytes.next_head(ne, f.end_ea)
         ea = ida_bytes.next_head(ea, f.end_ea)
 
-    # Classify each handler EA by its callees + imports
     out = []
     for ioctl, h in ioctl_handlers.items():
         h_ea = int(h, 16)
@@ -3873,9 +3246,7 @@ def _classify_per_ioctl(dispatcher_ea, ioctls_list):
         out.append({'ioctl': ioctl, 'handler_branch': h, 'primitives': prims})
     return out
 
-
 def _classify_handler(handler_ea, max_depth=2):
-    """Walk handler + callees collecting which kernel APIs are called."""
     import ida_funcs, ida_bytes, ida_ua, ida_xref, ida_name
     visited = set()
     queue = deque([(handler_ea, 0)])
@@ -3887,7 +3258,7 @@ def _classify_handler(handler_ea, max_depth=2):
         visited.add(fea)
         f = ida_funcs.get_func(fea)
         if not f:
-            # not a function boundary — synthesize one ad-hoc scan
+                                                                  
             ea = handler_ea
             for _ in range(80):
                 insn = ida_ua.insn_t()
@@ -3918,18 +3289,7 @@ def _classify_handler(handler_ea, max_depth=2):
             classes.add(cls)
     return sorted(classes)
 
-
-# ============================================================
-# Scoring
-# ============================================================
 def perfect_score(result: dict) -> tuple:
-    """Compute PERFECT-rubric score with caps.
-
-    Caps:
-      no FORCE_INTEGRITY               -> max 80 (HVCI-blocked tier)
-      no GUARD_CF or W+X INIT          -> max 60
-      else                             -> max 100
-    """
     h = result.get('hvci', {}) or {}
     ic = result.get('ioctl_count', 0)
     prims = result.get('primitives', []) or []
@@ -3945,42 +3305,34 @@ def perfect_score(result: dict) -> tuple:
 
     score = 0
 
-    # IOCTL count contribution
     if ic >= 30:   score += 25
     elif ic >= 10: score += 20
     elif ic >= 5:  score += 15
     elif ic >= 3:  score += 10
 
-    # Primitive imports contribution (up to +40, capped at 8 classes)
     score += min(40, 5 * len(prims))
 
-    # Gate analysis
     hard_gates = {'PID_CHECK', 'MODULE_PRESENCE', 'MAGIC_COOKIE',
                   'TRUST_DB_NULL', 'STRING_COMPARE', 'TOKEN_CHECK'}
     weak_gates = {'WEAK_BITNESS_CHECK_ONLY'}
     detected_hard = set(gates) & hard_gates
     if not gates or detected_hard - weak_gates == set():
-        # no gates OR only weak bitness check
+                                             
         score += 25
     elif detected_hard:
-        # subtract for each hard gate type
+                                          
         score -= 10 * len(detected_hard)
 
-    # DACL signal
     if result.get('has_io_create_device') and not result.get('has_io_create_device_secure'):
         score += 5
     if result.get('sddl_strings'):
-        score -= 5  # SDDL string present = some kind of access policy
+        score -= 5                                                    
 
-    # Archetype penalty
     archs = result.get('archetype_strings') or {}
     if (archs.get('STEALTH_HIDDEN') or archs.get('ANTICHEAT_AC')
             or archs.get('SELF_PROTECTION')):
         score -= 25
 
-    # Min-filter floor: HVCI-pass minifilter with primitive imports is
-    # still BYOVD-relevant even if user-IOCTL count is 0. Don't let it
-    # drop to absolute 0 just because we couldn't find an explicit IOCTL.
     if (h.get('force_integrity') and h.get('guard_cf') and not h.get('init_wx')
             and 'minifilter' in modes and len(prims) >= 3
             and score < 20):
@@ -3994,12 +3346,7 @@ def perfect_score(result: dict) -> tuple:
     else:             tier = 'SKIP'
     return score, tier
 
-
-# ============================================================
-# Report formatters
-# ============================================================
 def _print_strings_section(s: dict):
-    """Print the v2.1 --strings extractor block."""
     if not s or 'error' in s:
         return
     print()
@@ -4025,9 +3372,7 @@ def _print_strings_section(s: dict):
         if len(hits) > 10:
             print(f"      {C.DIM}... +{len(hits)-10} more{C.RESET}")
 
-
 def _print_cve_matches(matches: list):
-    """Render CVE matches in colorized table form."""
     if not matches:
         print(f"  {C.GREEN}CVE matcher: no matches{C.RESET}")
         return
@@ -4053,7 +3398,6 @@ def _print_cve_matches(matches: list):
                 print(f"                   {url}")
         if m.get('notes'):
             print(f"      {C.DIM}{m['notes']}{C.RESET}")
-
 
 def fmt_table(result: dict, verify: dict = None, full_imports: bool = False, verbose: bool = False) -> str:
     h = result.get('hvci', {}) or {}
@@ -4100,7 +3444,6 @@ def fmt_table(result: dict, verify: dict = None, full_imports: bool = False, ver
     lines.append(f"  Driver Entry:   {result.get('driver_entry') or 'n/a'}")
     lines.append(f"  Functions:      {result.get('function_count', 0)}")
 
-    # Hashes (v1.9)
     hashes = result.get('hashes', {}) or {}
     if hashes and 'sha256' in hashes:
         lines.append("")
@@ -4112,7 +3455,6 @@ def fmt_table(result: dict, verify: dict = None, full_imports: bool = False, ver
         if pe.get('imphash'):
             lines.append(f"    IMPHASH:      {pe['imphash']}")
 
-    # PE extended info (v1.9)
     pe = result.get('pe_extended', {}) or {}
     if pe and 'machine' in pe:
         lines.append("")
@@ -4131,7 +3473,7 @@ def fmt_table(result: dict, verify: dict = None, full_imports: bool = False, ver
             if verbose:
                 for s in sects:
                     lines.append(f"      [{s['name']:<8}] VA={s['va']}  vsize={s['vsize']:>8}  raw={s['raw_off']}  rsize={s['raw_size']:>8}  {s['flags']}")
-        # v2.0 — workflow-verified PE fingerprints
+                                                  
         if pe.get('rich_header_present'):
             n_recs = len(pe.get('rich_header_records', []) or [])
             fam = pe.get('rich_compiler_family') or '?'
@@ -4156,7 +3498,7 @@ def fmt_table(result: dict, verify: dict = None, full_imports: bool = False, ver
         if exn:
             preview = ', '.join(exn[:5]) + ('' if len(exn) <= 5 else f', +{len(exn)-5}')
             lines.append(f"    Exports:      {len(exn)}  ({preview})")
-        # Imports detail (--verbose only shows full list, --imports-only does too)
+                                                                                  
         if verbose:
             imps = pe.get('imports', []) or []
             lines.append("")
@@ -4240,7 +3582,6 @@ def fmt_table(result: dict, verify: dict = None, full_imports: bool = False, ver
     lines.append(C.DIM + "=" * 76 + C.RESET)
     return "\n".join(lines)
 
-
 def fmt_markdown(result: dict) -> str:
     score, tier = perfect_score(result)
     h = result.get('hvci', {}) or {}
@@ -4259,24 +3600,14 @@ def fmt_markdown(result: dict) -> str:
             md.append(f"- `{c}`")
     return "\n".join(md)
 
-
-# ============================================================
-# Main
-# ============================================================
 def _read_pe_bundle(driver_path: str) -> bytes:
-    """v2.5: single-read for the 3 PE-info functions. Returns the file
-    buffer or b'' on OSError so downstream _from_buf functions can return
-    their own error dicts."""
     try:
         with open(driver_path, 'rb') as f:
             return f.read()
     except OSError:
         return b''
 
-
 def quick_scan(driver_path: str, offline: bool = False) -> dict:
-    """Quick mode: just HVCI + signing + PE imports (no IDA). v2.5: single
-    file read shared across hvci/hashes/pe_extended (was 3 reads in v2.4)."""
     buf = _read_pe_bundle(driver_path)
     sig = {} if offline else signing_info(driver_path)
     burnt, why = is_burnt(sig)
@@ -4290,11 +3621,8 @@ def quick_scan(driver_path: str, offline: bool = False) -> dict:
         'analyze_time_s': 0.0,
     }
 
-
 def full_scan(driver_path: str, depth: int, no_flirt: bool, deep: bool, no_decompile: bool,
               verify_load: bool, offline: bool = False) -> dict:
-    """Full mode: IDA dispatcher walk + HVCI + signing + PE info. v2.5:
-    single-buf for the 3 PE-info funcs."""
     r = _ida_scan(driver_path, depth=depth, no_flirt=no_flirt, deep=deep, no_decompile=no_decompile)
     buf = _read_pe_bundle(driver_path)
     r['hvci'] = hvci_flags_from_buf(buf) if buf else {'error': 'open'}
@@ -4307,7 +3635,6 @@ def full_scan(driver_path: str, depth: int, no_flirt: bool, deep: bool, no_decom
     if verify_load and not offline:
         r['verify_load'] = signtool_kp(driver_path)
     return r
-
 
 USAGE_EPILOG = r"""
 examples:
@@ -4348,7 +3675,6 @@ examples:
     BYOVDsn1per --sweep crawler/ --poc   # 2. analyze + match CVEs
 """
 
-
 def main():
     p = argparse.ArgumentParser(
         prog='BYOVDsn1per',
@@ -4359,7 +3685,6 @@ def main():
     p.add_argument('driver', nargs='?', help='path to driver .sys')
     p.add_argument('--version', '-V', action='version', version='BYOVDsn1per v2.5')
 
-    # ------------- Mode flags -------------
     mode = p.add_argument_group('Scan modes (mutually exclusive on a single driver)')
     mode.add_argument('--quick', action='store_true', help='HVCI+sign only (no IDA)')
     mode.add_argument('--deep', action='store_true', help='full scan + per-IOCTL classification')
@@ -4370,7 +3695,6 @@ def main():
                       help='Hexrays-decompile one EA from DRIVER (also needs --ea)')
     mode.add_argument('--ea', help='effective address for --decompile (e.g. 0x14000315c)')
 
-    # ------------- Crawl mode -------------
     crawl = p.add_argument_group('Crawl: system-wide kernel-driver discovery')
     crawl.add_argument('--crawl', action='store_true',
                        help='walk known driver paths (33 defaults: System32\\drivers, DriverStore, Program Files, vendor dirs, user paths)')
@@ -4395,7 +3719,6 @@ def main():
     crawl.add_argument('--list-default-roots', action='store_true',
                        help='print the default crawl roots and exit')
 
-    # ------------- Standalone shortcuts (no full scan) -------------
     shortcut = p.add_argument_group('Standalone shortcuts (single driver, no full scan)')
     shortcut.add_argument('--hvci-only', action='store_true', help='print HVCI flag verdict and exit')
     shortcut.add_argument('--sign-verify', action='store_true', help='run signtool /kp /v and exit')
@@ -4403,7 +3726,6 @@ def main():
     shortcut.add_argument('--imports-only', action='store_true', help='dump PE imports table and exit')
     shortcut.add_argument('--cve-list', action='store_true', help='list all CVEs in the matcher database and exit')
 
-    # ------------- Per-driver add-ons (combine with main scan) -------------
     addon = p.add_argument_group('Per-driver add-ons (combine with main scan)')
     addon.add_argument('--poc', action='store_true',
                        help='SAFE CVE matcher: which known CVEs target this driver (no exploitation)')
@@ -4419,7 +3741,6 @@ def main():
                        help='in --sweep, skip drivers signed by burnt certificates')
     addon.add_argument('--verify-load', action='store_true', help='run signtool /kp /v during full scan')
 
-    # ------------- Scan tuning -------------
     tuning = p.add_argument_group('Scan tuning')
     tuning.add_argument('--depth', type=int, default=3, help='BFS depth for callee walks (default 3)')
     tuning.add_argument('--size-cap', type=float, default=1.5,
@@ -4431,7 +3752,6 @@ def main():
     tuning.add_argument('--offline-mode', '--offline', action='store_true',
                         help='no subprocess calls (skip PowerShell/signtool); PE-only')
 
-    # ------------- Output -------------
     output = p.add_argument_group('Output')
     output.add_argument('--output', choices=['table', 'json', 'markdown'], default='table',
                         help='output format (default: table)')
@@ -4447,7 +3767,7 @@ def main():
 
     if args.no_color or not sys.stdout.isatty():
         C.disable()
-    # Force stdout to UTF-8 so banner + non-ASCII chars don't crash on cp1252
+                                                                             
     try:
         sys.stdout.reconfigure(encoding='utf-8', errors='replace')
         sys.stderr.reconfigure(encoding='utf-8', errors='replace')
@@ -4457,15 +3777,10 @@ def main():
     if not args.no_banner and not args.quiet:
         print(C.CYAN + BANNER + C.RESET)
 
-    # v2.3.1: --restart alone implies --deepcrawl. Without this, `--restart`
-    # by itself falls through to single-driver mode and prints help — useless.
-    # Per user spec ("if non find you can do --deepcrawl restart"), restart's
-    # primary purpose is to wipe the checkpoint for a fresh entire-PC scan.
     if args.restart and not args.crawl and not args.deepcrawl:
         print(f"[BYOVDsn1per] {C.YELLOW}--restart alone -> auto-enabling --deepcrawl{C.RESET}")
         args.deepcrawl = True
 
-    # ----- v2.2/v2.3 --crawl + --deepcrawl: kernel-driver discovery -----
     if args.list_default_roots:
         print(f"{C.BOLD}Default --crawl roots ({len(DEFAULT_CRAWL_ROOTS)} entries){C.RESET}")
         for r in DEFAULT_CRAWL_ROOTS:
@@ -4482,7 +3797,7 @@ def main():
             roots.extend(drive_roots)
         elif not args.crawl_no_defaults:
             roots.extend(DEFAULT_CRAWL_ROOTS)
-        # Dedupe while preserving order
+                                       
         seen_r = set()
         roots = [r for r in roots if not (r in seen_r or seen_r.add(r))]
         out = args.crawl_out
@@ -4536,7 +3851,6 @@ def main():
             Path(args.json_out).write_text(json.dumps(stats, indent=2, default=str))
         return 0
 
-    # ----- v2.1 --diff DRV1 DRV2 (two-driver side-by-side comparison) -----
     if args.diff:
         d1, d2 = Path(args.diff[0]), Path(args.diff[1])
         for d in (d1, d2):
@@ -4564,7 +3878,6 @@ def main():
             Path(args.json_out).write_text(json.dumps(scans, indent=2, default=str))
         return 0
 
-    # ----- --cve-list (no driver needed) -----
     if args.cve_list:
         print(f"{C.BOLD}BYOVDsn1per — CVE matcher database ({len(CVE_DATABASE)} entries){C.RESET}")
         print()
@@ -4576,7 +3889,6 @@ def main():
             print()
         return 0
 
-    # ----- Single-EA decompile mode -----
     if args.decompile:
         if not args.ea:
             print("error: --decompile requires --ea ADDR")
@@ -4603,7 +3915,6 @@ def main():
             shutil.rmtree(tmp, ignore_errors=True)
         return 0
 
-    # ----- Sweep mode -----
     if args.sweep:
         sweep_dir = Path(args.sweep)
         bins = sorted(sweep_dir.glob('*.sys'))
@@ -4633,7 +3944,7 @@ def main():
                     print(f" cves={tags}", end='')
             print()
             results.append(r)
-        # Filter
+                
         if args.burnt_check:
             burnt = [r for r in results if r.get('signing', {}).get('burnt_status', '').startswith('BURNT')]
             results = [r for r in results if not r.get('signing', {}).get('burnt_status', '').startswith('BURNT')]
@@ -4656,7 +3967,6 @@ def main():
             Path(args.json_out).write_text(json.dumps(results, indent=2, default=str))
         return 0
 
-    # ----- Single-driver mode -----
     if not args.driver:
         p.print_help()
         return 1
@@ -4714,31 +4024,29 @@ def main():
     sc, tr = perfect_score(r)
     r['_score'] = sc
     r['_tier'] = tr
-    # --poc: SAFE CVE matcher (no exploitation, fingerprint only)
+                                                                 
     if args.poc:
         r['cve_matches'] = match_cves(r)
-    # --strings: extract ASCII + UTF-16LE strings, tag URLs/IPs/paths/etc.
+                                                                          
     if args.strings:
         s = extract_strings(str(drv))
-        # Honour --max-strings on the human-facing dumps
+                                                        
         for k in ('top_ascii', 'top_utf16'):
             if k in s and isinstance(s[k], list):
                 s[k] = s[k][:args.max_strings]
         r['strings'] = s
-    # --yara-rule: emit YARA detection rule for this driver
+                                                           
     yara_rule_text = None
     if args.yara_rule:
         yara_rule_text = emit_yara_rule(r)
         r['yara_rule'] = yara_rule_text
-    # --burnt-check: short-circuit and exit non-zero for burnt-signed drivers
+                                                                             
     if args.burnt_check:
         burnt_status = r.get('signing', {}).get('burnt_status', '')
         if burnt_status.startswith('BURNT'):
             print(f"[BYOVDsn1per] {drv.name}: SKIPPED — {burnt_status}")
             return 2
-    # --quiet: one-line verdict only (with CVE matches if --poc).
-    # Only show MEDIUM/HIGH/CONFIRMED — LOW would be noise (any 0x0022
-    # device-type driver "matches" 3 unrelated CVEs at LOW confidence).
+                                                                 
     if args.quiet:
         cves = ''
         strong_m = [m for m in (r.get('cve_matches') or [])
@@ -4757,10 +4065,10 @@ def main():
         print(fmt_table(r, verify=r.get('verify_load'), verbose=args.verbose))
         if r.get('cve_matches'):
             _print_cve_matches(r['cve_matches'])
-        # v2.1: print --strings block after main report
+                                                       
         if args.strings and r.get('strings'):
             _print_strings_section(r['strings'])
-        # v2.1: print --yara-rule block last (easy copy-paste)
+                                                              
         if yara_rule_text:
             print()
             print(C.BOLD + "  YARA rule:" + C.RESET)
@@ -4771,13 +4079,12 @@ def main():
                 print(f"  {C.DIM}-> written to {args.yara_out}{C.RESET}")
     if args.json_out:
         Path(args.json_out).write_text(json.dumps(r, indent=2, default=str))
-    # Filter check
+                  
     if args.filter == 'perfect' and tr not in ('PERFECT', 'STRONG'):
         return 1
     if args.filter == 'partial' and sc < 30:
         return 1
     return 0
-
 
 if __name__ == '__main__':
     sys.exit(main())

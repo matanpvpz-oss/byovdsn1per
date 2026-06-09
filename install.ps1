@@ -1,21 +1,3 @@
-<#
-    BYOVDsn1per installer (user-level, no admin required).
-
-    Copies BYOVDsn1per.py + BYOVDsn1per.cmd to
-        %LOCALAPPDATA%\Programs\BYOVDsn1per\
-    and adds that directory to the USER PATH so you can run
-        byovdsn1per --version
-    from any new terminal.
-
-    Usage:
-        powershell -ExecutionPolicy Bypass -File install.ps1
-    or, from a PowerShell prompt:
-        .\install.ps1
-
-    Uninstall:
-        .\install.ps1 -Uninstall
-#>
-
 [CmdletBinding()]
 param(
     [switch]$Uninstall,
@@ -74,7 +56,6 @@ Write-Host "  source:      $source"
 Write-Host "  install dir: $InstallDir"
 Write-Host ""
 
-# 1. Sanity check: required files in source
 foreach ($f in @("BYOVDsn1per.py", "BYOVDsn1per.cmd")) {
     $p = Join-Path $source $f
     if (-not (Test-Path $p)) {
@@ -84,7 +65,6 @@ foreach ($f in @("BYOVDsn1per.py", "BYOVDsn1per.cmd")) {
     }
 }
 
-# 2. Check Python availability
 $py = $null
 try {
     $py = (Get-Command python -ErrorAction Stop).Source
@@ -100,7 +80,6 @@ try {
 }
 Write-Host "  python:      $py" -ForegroundColor Green
 
-# 3. Create install dir
 if (-not (Test-Path $InstallDir)) {
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
     Write-Host "  + created $InstallDir" -ForegroundColor Green
@@ -108,7 +87,6 @@ if (-not (Test-Path $InstallDir)) {
     Write-Host "  - install dir already exists: $InstallDir" -ForegroundColor DarkGray
 }
 
-# 4. Copy files (overwrite existing)
 foreach ($f in @("BYOVDsn1per.py", "BYOVDsn1per.cmd", "README.md")) {
     $src = Join-Path $source $f
     if (Test-Path $src) {
@@ -117,17 +95,14 @@ foreach ($f in @("BYOVDsn1per.py", "BYOVDsn1per.cmd", "README.md")) {
     }
 }
 
-# 5. Create lowercase 'byovdsn1per.cmd' alias so users can type either case
 $alias = Join-Path $InstallDir "byovdsn1per.cmd"
 if (-not (Test-Path $alias)) {
     Copy-Item (Join-Path $InstallDir "BYOVDsn1per.cmd") $alias -Force
     Write-Host "  + created lowercase alias: byovdsn1per.cmd" -ForegroundColor Green
 }
 
-# 6. Add install dir to USER PATH
 Add-ToUserPath -Dir $InstallDir | Out-Null
 
-# 7. Pre-create the default crawl output directory so users see where it lives
 $defaultCrawlOut = Join-Path $env:USERPROFILE "BYOVDsn1per\crawler"
 if (-not (Test-Path $defaultCrawlOut)) {
     New-Item -ItemType Directory -Path $defaultCrawlOut -Force | Out-Null

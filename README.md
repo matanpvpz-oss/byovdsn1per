@@ -1,161 +1,158 @@
 # BYOVDsn1per
 
-IDA-powered BYOVD (Bring Your Own Vulnerable Driver) specimen scanner. Headless analysis via the `idalib` Python bindings shipped with IDA Pro 9.x.
+A scanner for Bring-Your-Own-Vulnerable-Driver work. Walks PE headers without IDA. Walks dispatchers with it.
 
-Identifies kernel drivers that load on modern Windows and exposes weaponizable primitives — IOCTL dispatchers, exposed kernel APIs, missing HVCI gates, weak access checks, and matches against a 30-entry database of documented vulnerable-driver CVEs.
+Built on `idalib`, the headless Python bindings shipped with IDA Pro Essential 9.x. The `--quick` mode skips IDA entirely if all you need is hashes, signing, HVCI flags, and a CVE fingerprint match.
 
 ## What it does
 
-- **Crawl**: walk known Windows driver paths (System32\drivers, DriverStore, Program Files, vendor dirs) or the entire PC, dedupe by SHA256, resume from a checkpoint file
-- **Quick triage** (no IDA): HVCI flags, Authenticode signing, PE imports, hashes, version info, Rich Header
-- **Full scan**: IOCTL dispatcher walk (legacy MJ14, recursive, WDF stub-inferred, minifilter, static-WDF), per-IOCTL primitive classification, gate detection (PID checks, magic cookies, trust-DB, string compares)
-- **CVE matcher**: safe fingerprint-only matching against 30 documented BYOVD CVEs (no exploitation, just identification — CONFIRMED via SHA256, HIGH via signer + IOCTL overlap, etc.)
-- **YARA rule emission**: compilable detection rule per driver using `hash` + `pe` YARA modules
-- **String extraction**: ASCII + UTF-16LE with regex-tagged URLs / IPv4 / registry keys / file paths / PDB / GUIDs / device paths / SDDL
-- **Driver diff**: side-by-side comparison of two drivers (hashes, signing, PE info, IOCTL surface, verdict)
+Three pieces.
 
-## Requirements
+**Crawl.** Walk known Windows driver paths (or every logical drive) and copy unique kernel drivers to one folder. Resumes from a checkpoint if you Ctrl+C halfway through. Output lands in `%USERPROFILE%\BYOVDsn1per\crawler\`.
 
-- Python 3.10+
-- IDA Pro Essential 9.3+ with the `idapro` Python package installed (for non-`--quick` modes)
-- Windows for full functionality (PowerShell for Authenticode, `signtool` for kernel signing policy verification)
+**Analyze.** Per driver: dispatcher walk (legacy MJ14, recursive, WDF stub-inferred, minifilter, static-WDF), per-IOCTL primitive classification, gate detection (PID checks, magic cookies, trust-DB, string compares), HVCI flag verdict, Authenticode chain, Rich Header, PDB info, TLS callbacks, exports.
 
-`--quick`, `--crawl`, `--diff` work on any OS; `--deep`, `--sweep`, dispatcher analysis require IDA.
+**Match.** A 30-entry CVE database. Fingerprinting only, no exploitation. Tiers: CONFIRMED via sha256_exact, HIGH via signer + IOCTL overlap, MEDIUM, LOW, with polluted device-type filtering so a `0x0022` driver doesn't trigger five unrelated CVEs.
+
+Also: `--diff` for side-by-side comparison of two drivers, `--strings` with regex-tagged URLs/IPv4/registry/PDB/SDDL, and `--yara-rule` to emit a YARA detection rule per driver.
 
 ## Install
-
-Run from PowerShell (no admin required):
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File install.ps1
 ```
 
-This copies the scanner to `%LOCALAPPDATA%\Programs\BYOVDsn1per\` and adds it to your user PATH. Open a **new** terminal and you can type `byovdsn1per` from anywhere.
+Copies the script to `%LOCALAPPDATA%\Programs\BYOVDsn1per\` and adds it to your user PATH. No admin needed. Open a new terminal and `byovdsn1per --version` should print v2.5.
 
-To uninstall:
+Uninstall: `.\install.ps1 -Uninstall`.
 
-```powershell
-.\install.ps1 -Uninstall
-```
+If you'd rather not install, the script runs in place. Call `python BYOVDsn1per.py`, or use `BYOVDsn1per.cmd` from the repo folder. The launcher tries `python` first, then `py -3`.
 
-If you'd rather not install, the script runs in place too — see "Quick start" below.
+## Requirements
+
+Python 3.10 or newer.
+
+For non-quick modes, you need IDA Pro Essential 9.3+ with the `idapro` Python package installed.
+
+Signing checks and HVCI flag extraction call Windows-only tools: PowerShell's `Get-AuthenticodeSignature` and `signtool /kp`. The PE-info pipeline is pure-stdlib and works anywhere Python runs.
+
+What works without IDA: `--quick`, `--crawl`, `--deepcrawl`, `--diff`, `--hashes-only`, `--strings`, `--yara-rule`, `--cve-list`, `--list-default-roots`.
 
 ## Where do crawl results go?
 
-By default, `--crawl` and `--deepcrawl` write to:
+`%USERPROFILE%\BYOVDsn1per\crawler\` by default. Same place every time, regardless of where you ran the command from.
 
-```
-%USERPROFILE%\BYOVDsn1per\crawler\
-```
+Each driver lands as `<stem>_<sha256[0:8]>.sys`. Two metadata files live in the same folder:
 
-This is the same location regardless of where you launched the command from. Each driver is copied as `<original-stem>_<sha256[0:8]>.sys`, and two metadata files live alongside the harvest:
+- `.scanned_paths.txt` lists directories the crawler has finished. Both `--crawl` and `--deepcrawl` consult this before walking, so resuming after a Ctrl+C costs nothing.
+- `.sha256_cache.txt` caches driver hashes. Subsequent runs skip rehashing files already in the folder.
 
-- `.scanned_paths.txt` — directories already processed (resumable checkpoint)
-- `.sha256_cache.txt` — hash-of-each-file cache (skip re-hashing on re-runs)
-
-Override the location with `--crawl-out DIR`:
+Override with `--crawl-out`:
 
 ```bash
 byovdsn1per --crawl --crawl-out D:\my_drivers
 ```
 
+Wipe the checkpoint and start fresh with `--restart`. Alone, `--restart` implies `--deepcrawl`.
+
 ## Quick start
 
-After running `install.ps1`, just type `byovdsn1per` from any terminal. If you skipped the installer, replace `byovdsn1per` with `python BYOVDsn1per.py` (or use `BYOVDsn1per.cmd` from the repo dir).
+If you skipped the installer, replace `byovdsn1per` with `python BYOVDsn1per.py`.
+
+Single driver:
 
 ```bash
-# Single driver, full analysis
 byovdsn1per driver.sys
-
-# Quick triage (no IDA dependency)
 byovdsn1per --quick driver.sys
-
-# Deep mode with per-IOCTL primitive classification
 byovdsn1per --deep driver.sys
+```
 
-# CVE matcher (SAFE - no exploitation)
+CVE matcher:
+
+```bash
 byovdsn1per --poc driver.sys
 byovdsn1per --cve-list
+```
 
-# Strings + YARA rule
+Strings, YARA, diff:
+
+```bash
 byovdsn1per --strings --yara-rule driver.sys
 byovdsn1per --yara-rule --yara-out rule.yar driver.sys
-
-# Compare two drivers
 byovdsn1per --diff a.sys b.sys
+```
 
-# Bulk sweep a directory
+Sweep a folder:
+
+```bash
+byovdsn1per --sweep drivers/
 byovdsn1per --sweep drivers/ --filter perfect
 ```
 
-## Crawl mode
-
-Discover kernel drivers on the system. Output goes to `%USERPROFILE%\BYOVDsn1per\crawler\` by default (see "Where do crawl results go?" above).
+## Crawl
 
 ```bash
-# 33 default known driver paths (System32\drivers, DriverStore, Program Files, vendor dirs)
 byovdsn1per --crawl
-
-# Every logical drive (A:..Z:) — entire PC
 byovdsn1per --deepcrawl
-
-# Wipe the .scanned_paths.txt checkpoint + fresh deepcrawl
 byovdsn1per --restart
-
-# Custom paths
 byovdsn1per --crawl --crawl-path D:\extracted_drivers
-byovdsn1per --crawl --crawl-out my_harvest/ --crawl-limit 100
-
-# Show what --crawl walks by default
+byovdsn1per --crawl --crawl-out my_harvest --crawl-limit 100
 byovdsn1per --list-default-roots
 ```
 
-Crawl filter is intentionally minimal — checks for `subsystem == NATIVE` and `AddressOfEntryPoint != 0` (has DriverEntry). Deduplicates by SHA256 using a `.sha256_cache.txt` so re-runs are instant. Resumable via per-directory checkpoint.
+The driver filter is intentionally minimal. It accepts anything with `subsystem == NATIVE` and `AddressOfEntryPoint != 0`. A few WDF helpers and minifilter assist DLLs slip through. That's deliberate. Filter later in `--sweep`.
 
-## End-to-end pipeline
+## End-to-end
 
 ```bash
-byovdsn1per --crawl                                  # 1. discover
-byovdsn1per --sweep %USERPROFILE%\BYOVDsn1per\crawler --poc       # 2. analyze + match CVEs
-byovdsn1per --sweep %USERPROFILE%\BYOVDsn1per\crawler --filter perfect  # 3. focus on top-tier
+byovdsn1per --crawl
+byovdsn1per --sweep %USERPROFILE%\BYOVDsn1per\crawler --poc
+byovdsn1per --sweep %USERPROFILE%\BYOVDsn1per\crawler --filter perfect
 ```
 
-## Output modes
+## Output formats
 
-```bash
---output table      # default human-readable
+```
+--output table       (default, ANSI-colored)
 --output json
 --output markdown
---quiet             # one-line verdict per driver
---verbose           # full IOCTL list, all sections, all imports
+--quiet              one line per driver
+--verbose            full IOCTL list, all sections, all imports
 ```
 
 ## Scoring
 
-Each driver gets a score 0-100 mapped to a tier:
+Each driver gets 0–100, mapped to a tier:
 
-- **PERFECT** (90+): HVCI loadable + production cert + open dispatcher + multiple primitives
-- **STRONG** (70+): HVCI loadable + at least one of: production cert, weak gates, rich primitive surface
-- **INTERESTING** (50+): partial signals
-- **WEAK** (30+): some BYOVD relevance
-- **SKIP**: below threshold (anti-cheat, archetype penalty, etc.)
+```
+PERFECT      90+   HVCI loadable, production cert, open dispatcher, rich primitive surface
+STRONG       70+   most of those
+INTERESTING  50+   some signals
+WEAK         30+   partial relevance
+SKIP         < 30  anti-cheat archetype penalty, etc.
+```
 
-Score caps apply by HVCI status (no-FI=80, no-GCF/WX=60, full HVCI=100).
+Score gets capped by HVCI status. No FORCE_INTEGRITY: cap 80. No GuardCF or has init-WX: cap 60. Full HVCI pass: uncapped.
 
-## Architecture notes
+The scoring mixes primitive count, gate count, archetype tags, and DACL signal so the verdict isn't reducible to one number.
 
-- Single-file scanner (~4500 lines). All extractors are pure-stdlib (no external PE parsing libs).
-- `idalib` is invoked in a copied-to-tempdir database to keep cross-driver state isolated.
-- Dispatcher walker supports MSVC switch lowering patterns: cmp+jz, cmp+jnz (fall-through handler), cmp+setcc, cmp+cmovcc, biased switches (`add reg, IMM; cmp reg, MAX`), `mov reg, IMM; cmp r2, reg; jcc` two-register patterns.
-- Burnt-cert thumbprint blacklist (LeYao, WDKTestCert, brazilian impersonating campaign, etc.) for fast filtering.
-- Polluted-device-type CVE matcher gating: types appearing in 3+ CVE entries (`0x22, 0x9C40, 0xA040, 0xC350`) are non-evidence in isolation.
+## A few implementation notes
 
-## Caveats
+It's a single-file scanner, about 4000 lines, pure stdlib for everything except idalib. Each driver gets analyzed in a copy under `%TEMP%` so cross-driver state doesn't leak.
 
-- IDA Pro is commercial software; the `idapro` Python package requires a valid license.
-- This is a research tool. The scoring is heuristic — manual analysis is required before claiming a driver is exploitable.
-- The CVE matcher is **fingerprinting-only**. It identifies known-vulnerable drivers but does NOT exploit them.
-- HVCI status reflects PE flags only. Whether a driver actually loads on a given host depends on hot-patch state, Windows Code Integrity policy, and Defender Vulnerable Driver Blocklist version.
+The dispatcher walker handles `cmp+jz`, `cmp+jnz` with fall-through handler (MSVC switch optimization, used by Avast aswSP), `cmp+setcc`, `cmp+cmovcc` (branchless materialization), biased switches (`add reg, IMM; cmp reg, MAX`), and the two-register `mov reg, IMM; cmp r2, reg; jcc` pattern. The look-ahead accepts both halves of each pair: `jz` and `jnz`, `setz` and `setnz`, `cmovz` and `cmovnz`. ZF is ZF either way.
+
+The MS-reserved device-type filter (`0x003C..0x7FFF`) catches phantom emissions. Without it, drivers like cpu-z report 2 extra "IOCTLs" that are really ASCII string constants. `0x5f534750` looks like an IOCTL until you notice the bytes spell out "PG_S_".
+
+CVE matching maintains a polluted-device-type set computed from the database at import time. Types appearing in 3+ entries are treated as non-evidence in isolation. `0x0022` shows up in 5 CVE entries, so a `0x0022` driver matching all of them on device type alone tells you nothing. You need signer or IOCTL overlap to escape LOW confidence.
+
+## What this isn't
+
+A way to load drivers. A way to exploit them. A way to detect them at runtime. It's just analysis.
+
+HVCI status from PE flags tells you whether the kernel signing policy will accept the driver. It doesn't tell you whether Defender's vulnerable-driver blocklist or your machine's local Code Integrity policy will allow it to actually load. Check those separately.
+
+The scoring is heuristic. A STRONG verdict means "worth looking at by hand," not "exploitable today." Do the manual work.
 
 ## License
 
