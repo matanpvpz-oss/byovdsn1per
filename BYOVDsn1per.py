@@ -3849,10 +3849,18 @@ def main():
         print(f"  dirs completed:   {stats['dirs_completed']}  (checkpointed)")
         print(f"  dirs skipped:     {C.DIM}{stats['dirs_skipped']}{C.RESET}  (already in checkpoint)")
         print(f"  elapsed:          {dt:.1f}s  ({stats['scanned_files']/max(dt,0.001):.0f} files/s)")
+        print()
+        abs_out = os.path.abspath(out)
+        if stats['copied'] > 0:
+            print(f"{C.GREEN}{C.BOLD}=> {stats['copied']} drivers discovered! Copied to {abs_out}\\{C.RESET}")
+        elif stats['kernel_drivers'] > 0:
+            print(f"{C.YELLOW}=> {stats['kernel_drivers']} drivers found, all duplicates of existing copies in {abs_out}\\{C.RESET}")
+        elif stats['dirs_skipped'] > 0:
+            print(f"{C.YELLOW}=> 0 new drivers (checkpoint hit {stats['dirs_skipped']} dirs). Use --restart for a fresh scan.{C.RESET}")
+        else:
+            print(f"{C.YELLOW}=> 0 drivers found in {len(stats['roots_walked'])} root(s).{C.RESET}")
         if not args.crawl_no_checkpoint and stats['copied'] == 0 and stats['dirs_skipped'] > 0:
-            print()
-            print(f"  {C.YELLOW}Note: 0 copies + {stats['dirs_skipped']} skipped from checkpoint.{C.RESET}")
-            print(f"  {C.YELLOW}If this is unexpected, run again with --restart to wipe the checkpoint.{C.RESET}")
+            print(f"  {C.DIM}checkpoint at {abs_out}\\.scanned_paths.txt{C.RESET}")
         if args.json_out:
             Path(args.json_out).write_text(json.dumps(stats, indent=2, default=str))
         return 0
