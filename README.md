@@ -8,7 +8,7 @@ Built on `idalib`, the headless Python bindings shipped with IDA Pro Essential 9
 
 Three pieces.
 
-**Crawl.** Walk known Windows driver paths (or every logical drive) and copy unique kernel drivers to one folder. Resumes from a checkpoint if you Ctrl+C halfway through. Output lands in `%USERPROFILE%\BYOVDsn1per\crawler\`.
+**Crawl.** Walk known Windows driver paths (or every logical drive) and copy unique kernel drivers to one folder. Resumes from a checkpoint if you Ctrl+C halfway through. Output lands in `%APPDATA%\BYOVDsn1per\crawler\`.
 
 **Analyze.** Per driver: dispatcher walk (legacy MJ14, recursive, WDF stub-inferred, minifilter, static-WDF), per-IOCTL primitive classification, gate detection (PID checks, magic cookies, trust-DB, string compares), HVCI flag verdict, Authenticode chain, Rich Header, PDB info, TLS callbacks, exports.
 
@@ -40,7 +40,7 @@ What works without IDA: `--quick`, `--crawl`, `--deepcrawl`, `--diff`, `--hashes
 
 ## Where do crawl results go?
 
-`%USERPROFILE%\BYOVDsn1per\crawler\` by default. Same place every time, regardless of where you ran the command from.
+`%APPDATA%\BYOVDsn1per\crawler\` by default. Same place every time, regardless of where you ran the command from.
 
 Each driver lands as `<stem>_<sha256[0:8]>.sys`. Two metadata files live in the same folder:
 
@@ -82,7 +82,7 @@ byovdsn1per --yara-rule --yara-out rule.yar driver.sys
 byovdsn1per --diff a.sys b.sys
 ```
 
-Sweep a folder. With no argument, `--sweep` analyses the `--crawl` output dir (`%USERPROFILE%\BYOVDsn1per\crawler\`):
+Sweep a folder. With no argument, `--sweep` analyses the `--crawl` output dir (`%APPDATA%\BYOVDsn1per\crawler\`):
 
 ```bash
 byovdsn1per --sweep                       # the crawler output dir
@@ -107,7 +107,7 @@ The driver filter is intentionally minimal. It accepts anything with `subsystem 
 ## End-to-end
 
 ```bash
-byovdsn1per --crawl                       # 1. discover. Results land in %USERPROFILE%\BYOVDsn1per\crawler\
+byovdsn1per --crawl                       # 1. discover. Results land in %APPDATA%\BYOVDsn1per\crawler\
 byovdsn1per --sweep --poc                 # 2. analyze + match CVEs (uses the crawler dir by default)
 byovdsn1per --sweep --filter perfect      # 3. only show PERFECT / STRONG tier
 ```

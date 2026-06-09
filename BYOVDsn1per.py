@@ -3661,7 +3661,7 @@ examples:
     BYOVDsn1per --diff a.sys b.sys
 
   Bulk sweep:
-    BYOVDsn1per --sweep                  # default: %USERPROFILE%\BYOVDsn1per\crawler\
+    BYOVDsn1per --sweep                  # default: %APPDATA%\BYOVDsn1per\crawler\
     BYOVDsn1per --sweep --filter perfect
     BYOVDsn1per --sweep D:\my_drivers    # custom dir
 
@@ -3672,7 +3672,7 @@ examples:
     BYOVDsn1per --list-default-roots     # show the 33 paths
 
   End-to-end pipeline:
-    BYOVDsn1per --crawl                  # 1. discover  (results -> %USERPROFILE%\BYOVDsn1per\crawler\)
+    BYOVDsn1per --crawl                  # 1. discover  (results -> %APPDATA%\BYOVDsn1per\crawler\)
     BYOVDsn1per --sweep --poc            # 2. analyze + match CVEs
 """
 
@@ -3690,10 +3690,10 @@ def main():
     mode.add_argument('--quick', action='store_true', help='HVCI+sign only (no IDA)')
     mode.add_argument('--deep', action='store_true', help='full scan + per-IOCTL classification')
     mode.add_argument('--sweep', metavar='DIR', nargs='?',
-                      const=os.path.join(os.environ.get('USERPROFILE', '.'),
+                      const=os.path.join(os.environ.get('APPDATA', '.'),
                                          'BYOVDsn1per', 'crawler'),
                       help='analyze every .sys in DIR. Without an argument, '
-                           'defaults to %%USERPROFILE%%\\BYOVDsn1per\\crawler\\ '
+                           'defaults to %%APPDATA%%\\BYOVDsn1per\\crawler\\ '
                            '(the --crawl output dir).')
     mode.add_argument('--diff', nargs=2, metavar=('DRV1', 'DRV2'),
                       help='compare two drivers side-by-side and exit')
@@ -3711,11 +3711,11 @@ def main():
     crawl.add_argument('--crawl-path', action='append', default=[], metavar='PATH',
                        help='add a crawl root path (repeatable). Combines with defaults unless --crawl-no-defaults.')
     crawl.add_argument('--crawl-out',
-                       default=os.path.join(os.environ.get('USERPROFILE', '.'),
+                       default=os.path.join(os.environ.get('APPDATA', '.'),
                                             'BYOVDsn1per', 'crawler'),
                        metavar='DIR',
                        help='output directory for crawled drivers '
-                            '(default: %%USERPROFILE%%\\BYOVDsn1per\\crawler\\)')
+                            '(default: %%APPDATA%%\\BYOVDsn1per\\crawler\\)')
     crawl.add_argument('--crawl-limit', type=int, default=0, metavar='N',
                        help='stop after N unique copies (default 0 = unlimited)')
     crawl.add_argument('--crawl-no-defaults', action='store_true',

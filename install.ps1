@@ -103,7 +103,7 @@ if (-not (Test-Path $alias)) {
 
 Add-ToUserPath -Dir $InstallDir | Out-Null
 
-$defaultCrawlOut = Join-Path $env:USERPROFILE "BYOVDsn1per\crawler"
+$defaultCrawlOut = Join-Path $env:APPDATA "BYOVDsn1per\crawler"
 if (-not (Test-Path $defaultCrawlOut)) {
     New-Item -ItemType Directory -Path $defaultCrawlOut -Force | Out-Null
     Write-Host "  + pre-created default crawl output: $defaultCrawlOut" -ForegroundColor Green
