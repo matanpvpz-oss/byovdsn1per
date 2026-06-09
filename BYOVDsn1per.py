@@ -235,6 +235,7 @@ CVE_DATABASE = [
         'year': 2022,
         'sha256_exact': set(),
         'signer_match': 'Wellbia',
+        'distinctive_signer': True,
         'dispatcher_signature': {
             'device_types': {0x0022},
             'ioctl_codes': set(),
@@ -254,6 +255,7 @@ CVE_DATABASE = [
         'year': 2019,
         'sha256_exact': set(),
         'signer_match': 'PC-Doctor',
+        'distinctive_signer': True,
         'dispatcher_signature': {
             'device_types': {0x9C40},
             'ioctl_codes': {0x9C40A148, 0x9C40A14C},
@@ -284,6 +286,7 @@ CVE_DATABASE = [
         'year': 2024,
         'sha256_exact': set(),
         'signer_match': 'OpenLibSys',
+        'distinctive_signer': True,
         'dispatcher_signature': {
             'device_types': {0x9C40},
             'ioctl_codes': {0x9C402450, 0x9C402454, 0x9C402458, 0x9C40A0C0, 0x9C40A0C4},
@@ -329,6 +332,7 @@ CVE_DATABASE = [
         'year': 2021,
         'sha256_exact': set(),
         'signer_match': 'wj32',
+        'distinctive_signer': True,
         'dispatcher_signature': {
             'device_types': {0x9999},
             'ioctl_codes': {0x99990001, 0x99990002, 0x99990003},
@@ -505,21 +509,6 @@ CVE_DATABASE = [
         'notes': 'Newer Dell utility variant (different hash/SHA family than DBUtil_2_3).',
     },
     {
-        'cve': 'CVE-2020-12138',
-        'name': 'ATSZIO64.sys (ASUSTOR ASUSTeK driver second variant)',
-        'year': 2020,
-        'sha256_exact': set(),
-        'signer_match': 'ASUSTeK',
-        'dispatcher_signature': {
-            'device_types': {0x0022},
-            'ioctl_codes': {0x222000, 0x222004},
-            'min_overlap': 1,
-        },
-        'primitives_gained': ['MSR_RW', 'PORT_IO'],
-        'pocs_known': ['https://github.com/sailay1996/abusing_driver_atszio_64'],
-        'notes': 'ATSZIO64.sys (ASUS) — MSR + port-IO surface.',
-    },
-    {
         'cve': 'CVE-2019-19234',
         'name': 'aswArPot.sys (Avast Anti-Rootkit)',
         'year': 2019,
@@ -540,6 +529,7 @@ CVE_DATABASE = [
         'year': 2022,
         'sha256_exact': set(),
         'signer_match': 'miHoYo',
+        'distinctive_signer': True,
         'dispatcher_signature': {
             'device_types': {0x0022},
             'ioctl_codes': {0x80034000, 0x80034140, 0x80034144},
@@ -547,7 +537,7 @@ CVE_DATABASE = [
         },
         'primitives_gained': ['PROCESS_KILL', 'HANDLE_DUP', 'MDL_PRIMITIVE'],
         'pocs_known': ['https://research.checkpoint.com/2022/anticheat-driver-mhyprot2-exploit/'],
-        'notes': 'Genshin Impact anti-cheat. Trend Micro reported abuse for EDR-kill.',
+        'notes': 'Genshin Impact anti-cheat. Used by AvosLocker for EDR kill. Encrypted dispatcher -- IOCTL count often 0; signer-only match is reliable evidence.',
     },
 ]
 
@@ -583,8 +573,12 @@ def match_cves(result: dict, min_confidence: str = 'LOW') -> list:
                       
         signer_hit = False
         if cve.get('signer_match') and cve['signer_match'].upper() in subject:
-            score += 2
-            evidence.append(f'signer:{cve["signer_match"]}')
+            if cve.get('distinctive_signer'):
+                score += 3
+                evidence.append(f'signer:{cve["signer_match"]} (distinctive)')
+            else:
+                score += 2
+                evidence.append(f'signer:{cve["signer_match"]}')
             signer_hit = True
                                   
         disp = cve.get('dispatcher_signature', {})
@@ -4107,7 +4101,7 @@ def _csv_dump(results: list) -> str:
     return out.getvalue()
 
 
-VERSION = 'v2.9'
+VERSION = 'v2.9.1'
 
 USAGE_EPILOG = r"""
 examples:
