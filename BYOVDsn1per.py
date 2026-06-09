@@ -3482,9 +3482,9 @@ def perfect_score(result: dict) -> tuple:
         score -= 25
 
     exports = (result.get('pe_extended') or {}).get('export_names', []) or []
-    if len(exports) >= 30:
+    if len(exports) >= 30 and ic <= 2:
         score -= 25
-    elif len(exports) >= 10:
+    elif len(exports) >= 10 and ic == 0:
         score -= 10
 
     dispatcher_modes = {'legacy_mj14', 'mj14_recursive', 'wdf_static',
@@ -4110,7 +4110,7 @@ def _csv_dump(results: list) -> str:
     return out.getvalue()
 
 
-VERSION = 'v2.9.3'
+VERSION = 'v2.9.4'
 
 USAGE_EPILOG = r"""
 examples:
