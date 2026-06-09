@@ -133,8 +133,10 @@ Sweep a folder. With no argument, `--sweep` analyses the `--crawl` output dir (`
 byovdsn1per --sweep                       # the crawler output dir
 byovdsn1per --sweep D:\my_drivers          # any folder you like
 byovdsn1per --sweep --filter perfect       # only PERFECT/STRONG tier
-byovdsn1per --sweep --poc                  # add CVE matching
+byovdsn1per --sweep --all                  # full enrichment: --deep --poc --strings --yara-rule --verify-load
 ```
+
+Sweep auto-saves a JSON of all per-driver results to `%APPDATA%\BYOVDsn1per\sweep_<timestamp>.json`. Ctrl+C is safe — partial results are flushed every 10 drivers and again on exit (via an `atexit` handler). The summary tells you exactly where the file landed.
 
 ## Crawl
 

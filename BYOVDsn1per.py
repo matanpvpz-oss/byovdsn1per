@@ -4238,30 +4238,78 @@ def main():
         cap = int(args.size_cap * 1024 * 1024)
         bins = [b for b in bins if b.stat().st_size <= cap]
         print(f"[BYOVDsn1per] sweeping {len(bins)} drivers (cap {args.size_cap} MB)")
+
+        if args.json_out:
+            auto_save = args.json_out
+        else:
+            ts = time.strftime('%Y%m%d_%H%M%S')
+            auto_save = os.path.join(
+                os.environ.get('APPDATA', '.'),
+                'BYOVDsn1per',
+                f'sweep_{ts}.json',
+            )
+        try:
+            Path(auto_save).parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+        print(f"[BYOVDsn1per] results will be saved to: {auto_save}")
+        print(f"[BYOVDsn1per] Ctrl+C is safe — partial results auto-save every 10 drivers")
+        print()
+
         results = []
-        for i, b in enumerate(bins, 1):
-            print(f"  [{i}/{len(bins)}] {b.name[:40]}...", end='', flush=True)
-            if args.quick:
-                r = quick_scan(str(b), offline=args.offline_mode)
-            else:
-                r = full_scan(str(b), args.depth, args.no_flirt,
-                              args.deep, args.no_decompile, args.verify_load,
-                              offline=args.offline_mode)
-            sc, tr = perfect_score(r)
-            r['_score'] = sc
-            r['_tier'] = tr
-            if args.poc:
-                r['cve_matches'] = match_cves(r)
-            print(f" {tr} ({sc}) t={r.get('analyze_time_s',0):.1f}s", end='')
-            if args.poc and r.get('cve_matches'):
-                strong = [m for m in r['cve_matches']
-                          if m.get('confidence') in ('CONFIRMED', 'HIGH', 'MEDIUM')]
-                if strong:
-                    tags = ','.join(f"{m['cve']}({m['confidence'][0]})" for m in strong[:3])
-                    print(f" cves={tags}", end='')
+        interrupted = False
+
+        def _flush_results():
+            try:
+                Path(auto_save).write_text(json.dumps(results, indent=2, default=str))
+                return True
+            except OSError:
+                return False
+
+        import atexit
+        atexit.register(_flush_results)
+
+        try:
+            for i, b in enumerate(bins, 1):
+                print(f"  [{i}/{len(bins)}] {b.name[:40]}...", end='', flush=True)
+                if args.quick:
+                    r = quick_scan(str(b), offline=args.offline_mode)
+                else:
+                    r = full_scan(str(b), args.depth, args.no_flirt,
+                                  args.deep, args.no_decompile, args.verify_load,
+                                  offline=args.offline_mode)
+                r['path'] = str(b)
+                sc, tr = perfect_score(r)
+                r['_score'] = sc
+                r['_tier'] = tr
+                if args.poc:
+                    r['cve_matches'] = match_cves(r)
+                if args.strings:
+                    s = extract_strings(str(b))
+                    if 'top_ascii' in s:
+                        s['top_ascii'] = s['top_ascii'][:args.max_strings]
+                    if 'top_utf16' in s:
+                        s['top_utf16'] = s['top_utf16'][:args.max_strings]
+                    r['strings'] = s
+                if args.yara_rule:
+                    r['yara_rule'] = emit_yara_rule(r)
+                print(f" {tr} ({sc}) t={r.get('analyze_time_s',0):.1f}s", end='')
+                if args.poc and r.get('cve_matches'):
+                    strong = [m for m in r['cve_matches']
+                              if m.get('confidence') in ('CONFIRMED', 'HIGH', 'MEDIUM')]
+                    if strong:
+                        tags = ','.join(f"{m['cve']}({m['confidence'][0]})" for m in strong[:3])
+                        print(f" cves={tags}", end='')
+                print()
+                results.append(r)
+                if i % 10 == 0:
+                    _flush_results()
+        except KeyboardInterrupt:
+            interrupted = True
             print()
-            results.append(r)
-                
+            print(f"{C.YELLOW}{C.BOLD}[BYOVDsn1per] Interrupted (Ctrl+C){C.RESET}")
+            print(f"  processed: {len(results)}/{len(bins)} drivers")
+
         if args.burnt_check:
             burnt = [r for r in results if r.get('signing', {}).get('burnt_status', '').startswith('BURNT')]
             results = [r for r in results if not r.get('signing', {}).get('burnt_status', '').startswith('BURNT')]
@@ -4271,18 +4319,26 @@ def main():
         elif args.filter == 'partial':
             results = [r for r in results if r.get('_score', 0) >= 30]
         results.sort(key=lambda r: r.get('_score', 0), reverse=True)
+
+        saved = _flush_results()
+        if saved:
+            label = "partial results" if interrupted else "results"
+            print()
+            print(f"{C.GREEN}{C.BOLD}=> {len(results)} {label} saved to {auto_save}{C.RESET}")
+        else:
+            print(f"{C.YELLOW}WARNING: could not write to {auto_save}{C.RESET}")
+
         if args.output == 'json':
             print(json.dumps(results, indent=2, default=str))
         elif args.output == 'markdown':
             for r in results:
                 print(fmt_markdown(r))
                 print()
-        else:
+        elif not interrupted:
             for r in results:
                 print(fmt_table(r, verify=r.get('verify_load')))
-        if args.json_out:
-            Path(args.json_out).write_text(json.dumps(results, indent=2, default=str))
-        return 0
+
+        return 130 if interrupted else 0
 
     if not args.driver:
         p.print_help()
