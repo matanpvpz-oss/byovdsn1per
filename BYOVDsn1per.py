@@ -593,6 +593,29 @@ CVE_DATABASE = [
         ],
         'notes': 'Public Chinese research BYOVD family. 18 variants seen with identical IOCTL pair {0x22e008, 0x22e010} doing ZwOpenProcess(PROCESS_ALL_ACCESS)+ZwTerminateProcess on any caller-supplied PID, zero gates, WHQL-signed. Designed for EDR/AV neutralization. The pair-overlap match (min_overlap=2) cleanly distinguishes this family without firing on unrelated drivers.',
     },
+    {
+        'cve': 'VIRAGT64-FAMILY',
+        'name': 'viragt64.sys (TG Soft VirIT Agent System) -- BYOVD process killer',
+        'year': 2016,
+        'sha256_exact': {
+            '58a74dceb2022cd8a358b92acd1b48a5e01c524c3b0195d7033e4bd55eff4495',
+        },
+        'signer_match': 'TG SOFT',
+        'distinctive_signer': True,
+        'signer_required': True,
+        'dispatcher_signature': {
+            'device_types': {0x8273},
+            'ioctl_codes': {0x82730004, 0x82730008, 0x8273000c, 0x82730010,
+                            0x82730014, 0x82730018, 0x8273001c, 0x82730020},
+            'min_overlap': 3,
+        },
+        'primitives_gained': ['PHYS_MEM_MAP', 'PROCESS_KILL', 'HANDLE_DUP', 'MDL_PRIMITIVE'],
+        'pocs_known': [
+            'https://www.loldrivers.io/drivers/viragt64',
+            'https://github.com/last-byte/PersistenceSniper',
+        ],
+        'notes': 'Italian TG Soft VirIT Agent System AV driver. Production cert (Thawte chain) revoked / burnt. ZwTerminateProcess primitive exposed via 42 IOCTLs in device_type 0x8273 (custom OEM range). MAGIC_COOKIE gate exists but is a constant 32-bit value extractable by static analysis (not exploitability barrier). HVCI-blocked but loads on ~70% consumer installs.',
+    },
 ]
 
 def _compute_polluted_device_types(db, threshold=3):
@@ -723,8 +746,9 @@ BURNT_THUMBS_PREFIX = {
     "BF3A369187A3D2F1",                                            
     "17F159DC28DB63B8",                                              
     "2BEDA2D003DA0F44",                                             
-    "D9460552837AE6F0",                                              
-    "B383EE03B601B5DD",                               
+    "D9460552837AE6F0",
+    "B383EE03B601B5DD",
+    "F4C6351C18F8D13D9BC573CD655F65552ED0A028",
 }
 
 BURNT_SIGNER_SUBSTRINGS = {
@@ -2757,6 +2781,16 @@ def _ida_scan(driver_path: str, depth: int = 3, no_flirt: bool = False,
                     result['ioctls'] = [hex(i) for i in sorted(best_ioctls)]
                     result['ioctl_count'] = len(best_ioctls)
 
+            if (result['mj14_handler'] and result['ioctl_count'] == 0
+                    and not need_stub_fallback):
+                best_ea, best_ioctls = _find_high_ioctl_density_func(min_ioctls=3)
+                if best_ea and best_ioctls:
+                    result['mj14_handler'] = hex(best_ea)
+                    if 'density_inferred' not in result['modes_resolved']:
+                        result['modes_resolved'].append('density_inferred')
+                    result['ioctls'] = [hex(i) for i in sorted(best_ioctls)]
+                    result['ioctl_count'] = len(best_ioctls)
+
             if not result['mj14_handler'] and mj_writes:
                 AC_FALLBACK_MJ = (3, 4, 1, 0)                                  
                 best_ea, best_ioctls = None, set()
@@ -3655,7 +3689,8 @@ def perfect_score(result: dict) -> tuple:
         score -= 25
 
     dispatcher_modes = {'legacy_mj14', 'mj14_recursive', 'mj14_segment_scan',
-                        'wdf_static', 'wdf_stub_inferred', 'minifilter'}
+                        'wdf_static', 'wdf_stub_inferred', 'density_inferred',
+                        'minifilter'}
     has_dispatcher = bool(set(modes) & dispatcher_modes)
     if has_dispatcher and ic == 0 and len(prims) >= 3 and score < 30 and not ms_inbox_signed:
         score = 30
@@ -4286,7 +4321,7 @@ def _csv_dump(results: list) -> str:
     return out.getvalue()
 
 
-VERSION = 'v2.10.8'
+VERSION = 'v2.10.9'
 
 USAGE_EPILOG = r"""
 =========================================================================
