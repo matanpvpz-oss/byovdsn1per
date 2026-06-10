@@ -3623,6 +3623,57 @@ def _classify_handler(handler_ea, max_depth=2):
             classes.add(cls)
     return sorted(classes)
 
+def severity_score(result: dict) -> tuple:
+    h = result.get('hvci', {}) or {}
+    prims = set(result.get('primitives', []) or [])
+    gates = result.get('gates_detected', []) or []
+    cve_matches = result.get('cve_matches', []) or []
+    confs = {m.get('confidence', 'LOW') for m in cve_matches}
+    has_strong_cve = 'CONFIRMED' in confs or 'HIGH' in confs
+
+    fi = h.get('force_integrity')
+    cf = h.get('guard_cf')
+    wx = h.get('init_wx')
+    sig = result.get('signing', {}) or {}
+    burnt_status = (sig.get('burnt_status') or '').upper()
+    burnt = burnt_status.startswith('BURNT')
+
+    sev = 0
+
+    if fi and cf and not wx:
+        sev += 40
+    elif fi or cf:
+        sev += 25
+    else:
+        sev += 15
+
+    tier_1 = {'KERNEL_EXEC', 'PHYS_MEM_MAP', 'MSR_WRITE'}
+    tier_2 = {'PCI_CONFIG_RW', 'PORT_IO', 'PROCESS_KILL'}
+    tier_3 = {'TOKEN_STEAL', 'HANDLE_DUP', 'MDL_PRIMITIVE', 'KERNEL_SYMBOL_RES'}
+    sev += min(15, 5 * len(prims & tier_1))
+    sev += min(10, 3 * len(prims & tier_2))
+    sev += min(8, 2 * len(prims & tier_3))
+
+    hard_gates = {'PID_CHECK', 'MODULE_PRESENCE', 'MAGIC_COOKIE',
+                  'TRUST_DB_NULL', 'STRING_COMPARE', 'TOKEN_CHECK'}
+    if not (set(gates) & hard_gates):
+        sev += 15
+
+    if has_strong_cve:
+        sev += 10
+
+    if burnt:
+        sev -= 15
+
+    sev = max(0, min(100, sev))
+
+    if   sev >= 80: label = 'CRITICAL'
+    elif sev >= 60: label = 'HIGH'
+    elif sev >= 40: label = 'MEDIUM'
+    elif sev >= 20: label = 'LOW'
+    else:           label = 'MINIMAL'
+    return sev, label
+
 def perfect_score(result: dict) -> tuple:
     h = result.get('hvci', {}) or {}
     ic = result.get('ioctl_count', 0)
@@ -3944,8 +3995,19 @@ def fmt_table(result: dict, verify: dict = None, full_imports: bool = False, ver
             cl = ', '.join(entry.get('primitives', [])) or '?'
             lines.append(f"    {entry['ioctl']} -> {entry['handler_branch']:<14} [{cl}]")
         lines.append("")
+    sev, sev_label = severity_score(result)
+    result['_severity'] = sev
+    result['_severity_label'] = sev_label
+    sev_col = {
+        'CRITICAL': C.RED + C.BOLD,
+        'HIGH':     C.RED,
+        'MEDIUM':   C.YELLOW,
+        'LOW':      C.DIM,
+        'MINIMAL':  C.DIM,
+    }.get(sev_label, '')
     lines.append(C.BOLD + C.CYAN + "  VERDICT" + C.RESET)
-    lines.append(f"    Score:        {tier_col}{score}/100  {tier}{C.RESET}")
+    lines.append(f"    BYOVD-likelihood: {tier_col}{score:3d}/100  {tier}{C.RESET}")
+    lines.append(f"    Severity:         {sev_col}{sev:3d}/100  {sev_label}{C.RESET}")
     if hvci_perfect(h):
         lines.append(f"    {C.GREEN}HVCI loadable on all hosts including HVCI-enabled.{C.RESET}")
     else:
@@ -3956,10 +4018,12 @@ def fmt_table(result: dict, verify: dict = None, full_imports: bool = False, ver
 
 def fmt_markdown(result: dict) -> str:
     score, tier = perfect_score(result)
+    sev, sev_label = severity_score(result)
     h = result.get('hvci', {}) or {}
     s = result.get('signing', {}) or {}
     md = [f"# BYOVDsn1per — {Path(result['driver']).name}\n"]
-    md.append(f"**Score**: {score}/100 ({tier})  ")
+    md.append(f"**BYOVD-likelihood**: {score}/100 ({tier})  ")
+    md.append(f"**Severity**: {sev}/100 ({sev_label})  ")
     md.append(f"**HVCI**: {'PASS' if hvci_perfect(h) else 'BLOCKED'}  ")
     md.append(f"**Signer**: {(s.get('SUBJECT') or '?')[:80]}  ")
     md.append(f"**IOCTLs**: {result.get('ioctl_count',0)}  ")
@@ -4446,7 +4510,7 @@ def _csv_dump(results: list) -> str:
     return out.getvalue()
 
 
-VERSION = 'v2.10.10'
+VERSION = 'v2.10.11'
 
 USAGE_EPILOG = r"""
 =========================================================================
