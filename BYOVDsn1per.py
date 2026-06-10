@@ -3554,12 +3554,20 @@ def perfect_score(result: dict) -> tuple:
 
     score += min(40, 5 * len(prims))
 
+    sig_subject_early = ((result.get('signing') or {}).get('SUBJECT') or '').upper()
+    ms_inbox_early = ('CN=MICROSOFT WINDOWS,' in sig_subject_early
+                      or sig_subject_early.startswith('CN=MICROSOFT WINDOWS,'))
+    cve_confs_early = {m.get('confidence', 'LOW')
+                       for m in (result.get('cve_matches', []) or [])}
+    has_strong_cve = 'CONFIRMED' in cve_confs_early or 'HIGH' in cve_confs_early
+
     hard_gates = {'PID_CHECK', 'MODULE_PRESENCE', 'MAGIC_COOKIE',
                   'TRUST_DB_NULL', 'STRING_COMPARE', 'TOKEN_CHECK'}
     weak_gates = {'WEAK_BITNESS_CHECK_ONLY'}
     detected_hard = set(gates) & hard_gates
     if not gates or detected_hard - weak_gates == set():
-        score += 25
+        if not (ms_inbox_early and not has_strong_cve):
+            score += 25
     elif detected_hard:
         score -= min(20, 10 * len(detected_hard))
 
@@ -4217,7 +4225,7 @@ def _csv_dump(results: list) -> str:
     return out.getvalue()
 
 
-VERSION = 'v2.10.2'
+VERSION = 'v2.10.3'
 
 USAGE_EPILOG = r"""
 examples:
