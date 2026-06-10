@@ -3751,6 +3751,40 @@ def _looks_like_ioctl(val: int) -> bool:
 _JT_CASE_RE = re.compile(r'cases?\s+([\-\d,\s]+)')
 _JT_TOKEN_RE = re.compile(r'(-?\d+)(?:-(-?\d+))?')
 
+def _switch_info_cases(ea):
+    try:
+        import ida_nalt
+    except ImportError:
+        return None
+    try:
+        si = ida_nalt.get_switch_info(ea)
+    except Exception:
+        return None
+    if si is None:
+        return None
+    try:
+        ncases = int(si.ncases)
+    except Exception:
+        return None
+    if ncases <= 0:
+        return None
+    out = set()
+    try:
+        values = si.values
+        if values is None:
+            return None
+        for i in range(ncases):
+            try:
+                v = int(values[i]) & 0xFFFFFFFF
+            except Exception:
+                continue
+            out.add(v)
+    except Exception:
+        return None
+    if not out:
+        return None
+    return out
+
 def _extract_jumptable_cases_from_line(line: str):
     out = set()
     if 'case' not in line:
@@ -3771,21 +3805,9 @@ def _extract_jumptable_cases_from_line(line: str):
             continue
         a_s, b_s = tm.group(1), tm.group(2)
         try:
-            a = int(a_s) & 0xFFFFFFFF
             if b_s is None:
+                a = int(a_s) & 0xFFFFFFFF
                 out.add(a)
-            else:
-                b = int(b_s) & 0xFFFFFFFF
-                lo, hi = (a, b) if a <= b else (b, a)
-                if hi - lo > 4096:
-                    out.add(lo); out.add(hi)
-                else:
-                    aligned = {v & 0xFFFFFFFF for v in range(lo, hi + 1, 4)}
-                    if hi & 3:
-                        aligned.add(hi & 0xFFFFFFFF)
-                    if not aligned:
-                        aligned = {v & 0xFFFFFFFF for v in range(lo, hi + 1)}
-                    out.update(aligned)
         except (TypeError, ValueError):
             continue
     return out
@@ -3860,9 +3882,18 @@ def _enumerate_dispatch_ioctls(handler_ea, max_depth=3):
             if d == 0:
                 line = ida_lines.tag_remove(ida_lines.generate_disasm_line(ea, 0) or "")
                 if 'jumptable' in line and 'default case' not in line:
-                    for v in _extract_jumptable_cases_from_line(line):
-                        if _looks_like_ioctl(v):
-                            _emit(v, d)
+                    sw_cases = _switch_info_cases(ea)
+                    if sw_cases is not None:
+                        for v in sw_cases:
+                            if _looks_like_ioctl(v):
+                                _emit(v, d)
+                    else:
+                        ann_cases = _extract_jumptable_cases_from_line(line)
+                        ann_dts = {(v >> 16) & 0xFFFF for v in ann_cases if _looks_like_ioctl(v)}
+                        if len(ann_dts) <= 2:
+                            for v in ann_cases:
+                                if _looks_like_ioctl(v):
+                                    _emit(v, d)
 
             if mnem == 'sub' and insn.ops[1].type == ida_ua.o_imm:
                 ne = ida_bytes.next_head(ea, f.end_ea)
@@ -3969,6 +4000,24 @@ def _enumerate_dispatch_ioctls(handler_ea, max_depth=3):
             if ioctl_min_depth.get(v, 0) == 0
             or ((v >> 16) & 0xFFFF) in dts_at_zero
         }
+
+    aligned = {v for v in all_ioctls if (v & 3) == 0}
+    if aligned:
+        pruned = set(aligned)
+        for v in all_ioctls:
+            method = v & 3
+            if method == 0:
+                continue
+            if method == 2:
+                pruned.add(v)
+                continue
+            floor = v & ~3
+            ceil = floor + 4
+            if floor in aligned or ceil in aligned:
+                continue
+            pruned.add(v)
+        all_ioctls = pruned
+
     return all_ioctls
 
 def _walk_minifilter():
@@ -5203,7 +5252,7 @@ def _csv_dump(results: list) -> str:
     return out.getvalue()
 
 
-VERSION = 'v2.10.22'
+VERSION = 'v2.10.24'
 
 USAGE_EPILOG = r"""
 =========================================================================
