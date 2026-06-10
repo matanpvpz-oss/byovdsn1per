@@ -542,6 +542,27 @@ CVE_DATABASE = [
         'pocs_known': ['https://research.checkpoint.com/2022/anticheat-driver-mhyprot2-exploit/'],
         'notes': 'Genshin Impact anti-cheat. Used by AvosLocker for EDR kill. Encrypted dispatcher -- IOCTL count often 0; signer-only match is reliable evidence.',
     },
+    {
+        'cve': 'CVE-2023-37252',
+        'name': 'npcap.sys (Nmap Project npcap WHQL packet capture)',
+        'year': 2023,
+        'sha256_exact': {'734c62543768e37c36386b4a07582bb5b322a60d5c997626465725c5b5cef978'},
+        'signer_match': 'INSECURE.COM',
+        'dispatcher_signature': {
+            'device_types': {0x2168, 0x216c, 0x21a8},
+            'ioctl_codes': {0x216804, 0x216808, 0x21680c, 0x216814, 0x21681c,
+                            0x216824, 0x216840, 0x216844, 0x216848, 0x21684c,
+                            0x216c04, 0x21a818, 0x21a820, 0x21a830, 0x21a834},
+            'min_overlap': 3,
+        },
+        'primitives_gained': ['HANDLE_DUP', 'KERNEL_SYMBOL_RES', 'PHYS_MEM_MAP',
+                              'TOKEN_STEAL'],
+        'pocs_known': [
+            'https://nmap.org/npcap/guide/security.html',
+            'https://github.com/nmap/npcap/issues/653',
+        ],
+        'notes': 'Nmap.org npcap WHQL-signed. Magic-cookie gate (FsContext->Magic=NPCN) is bypassed by simply opening \\Device\\NPCAP first. CVE-2023-37252 is the npcap-svc LPE; the kernel-side surface is the BYOVD-tier exposure.',
+    },
 ]
 
 def _compute_polluted_device_types(db, threshold=3):
@@ -4196,7 +4217,7 @@ def _csv_dump(results: list) -> str:
     return out.getvalue()
 
 
-VERSION = 'v2.10.1'
+VERSION = 'v2.10.2'
 
 USAGE_EPILOG = r"""
 examples:
