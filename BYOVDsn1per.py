@@ -529,12 +529,13 @@ CVE_DATABASE = [
         'cve': 'CVE-2022-32429',
         'name': 'mhyprot2.sys (Genshin Impact mhyprot2)',
         'year': 2022,
-        'sha256_exact': set(),
+        'sha256_exact': {'509628b6d16d2428031311d7bd2add8d5f5160e9ecc0cd909f1e82bbbb3234d6'},
         'signer_match': 'miHoYo',
         'distinctive_signer': True,
         'dispatcher_signature': {
-            'device_types': {0x0022},
-            'ioctl_codes': {0x80034000, 0x80034140, 0x80034144},
+            'device_types': {0x0022, 0x8010},
+            'ioctl_codes': {0x80034000, 0x80034140, 0x80034144, 0x80104000,
+                            0x82054000, 0x83024000, 0x83074000, 0x83064000, 0x82074000},
             'min_overlap': 1,
         },
         'primitives_gained': ['PROCESS_KILL', 'HANDLE_DUP', 'MDL_PRIMITIVE'],
@@ -2633,13 +2634,23 @@ def _ida_scan(driver_path: str, depth: int = 3, no_flirt: bool = False,
                 result['archetype_strings'] = archs_pruned
 
             mj_writes = _scan_mj_writes_recursive(de_ea, max_depth=depth) if de_ea != ida_idaapi.BADADDR else {}
+            via_segment_scan = False
+            if not mj_writes or 14 not in mj_writes:
+                fb = _scan_mj_writes_segment_fallback()
+                if fb:
+                    for k, v in fb.items():
+                        mj_writes.setdefault(k, v)
+                    via_segment_scan = 14 in fb and (not mj_writes or 14 in fb)
             if mj_writes:
                 result['mj_table_writes'] = {str(k): hex(v) for k, v in mj_writes.items()}
                 if 14 in mj_writes:
                     handler = mj_writes[14]
                     result['mj14_handler'] = hex(handler)
                     direct = _is_mj14_in_func(de_ea, 14, handler)
-                    result['modes_resolved'].append('legacy_mj14' if direct else 'mj14_recursive')
+                    if via_segment_scan:
+                        result['modes_resolved'].append('mj14_segment_scan')
+                    else:
+                        result['modes_resolved'].append('legacy_mj14' if direct else 'mj14_recursive')
                     ioctls = _enumerate_dispatch_ioctls(handler, max_depth=depth)
                     result['ioctls'] = [hex(i) for i in sorted(ioctls)]
                     result['ioctl_count'] = len(ioctls)
@@ -2880,6 +2891,61 @@ def _scan_mj_writes_recursive(start_func_ea, max_depth=3):
         for mj_slot in range(min(count, 16)):
             if mj_slot not in found:
                 found[mj_slot] = handler_ea
+    return found
+
+def _scan_mj_writes_segment_fallback():
+    import ida_segment, ida_bytes, ida_ua, ida_funcs, idc
+    is32 = _is_32bit_image()
+    if is32:
+        base, stride, max_off = 0x38, 4, 0x80
+    else:
+        base, stride, max_off = 0x70, 8, 0x100
+    found = {}
+    for i in range(ida_segment.get_segm_qty()):
+        seg = ida_segment.getnseg(i)
+        if seg is None or seg.type != ida_segment.SEG_CODE:
+            continue
+        ea = seg.start_ea
+        sentinel = 0
+        while ea < seg.end_ea and sentinel < 800000:
+            sentinel += 1
+            insn = ida_ua.insn_t()
+            if not ida_ua.decode_insn(insn, ea):
+                nh = ida_bytes.next_head(ea, seg.end_ea)
+                if nh <= ea:
+                    break
+                ea = nh
+                continue
+            mnem = insn.get_canon_mnem()
+            op0 = insn.ops[0]
+            if mnem == 'mov' and op0.type == ida_ua.o_displ:
+                off = op0.addr
+                if base <= off <= max_off and (off - base) % stride == 0:
+                    mj_idx = (off - base) // stride
+                    if mj_idx not in found and 0 <= mj_idx <= 27:
+                        op1 = insn.ops[1]
+                        if op1.type == ida_ua.o_reg:
+                            scan = ea
+                            for _ in range(15):
+                                ph = ida_bytes.prev_head(scan, seg.start_ea)
+                                if ph >= scan or ph < seg.start_ea:
+                                    break
+                                scan = ph
+                                pi = ida_ua.insn_t()
+                                if not ida_ua.decode_insn(pi, scan):
+                                    continue
+                                pmn = pi.get_canon_mnem()
+                                if (pmn in ('lea', 'mov')
+                                        and pi.ops[0].type == ida_ua.o_reg
+                                        and pi.ops[0].reg == op1.reg):
+                                    handler = pi.ops[1].addr or pi.ops[1].value
+                                    if handler and ida_funcs.get_func(handler):
+                                        found[mj_idx] = handler
+                                    break
+            nh = ida_bytes.next_head(ea, seg.end_ea)
+            if nh <= ea:
+                break
+            ea = nh
     return found
 
 def _is_mj14_in_func(func_ea, mj_idx, handler_ea):
@@ -3495,8 +3561,8 @@ def perfect_score(result: dict) -> tuple:
     if ms_inbox_signed and ic <= 3:
         score -= 25
 
-    dispatcher_modes = {'legacy_mj14', 'mj14_recursive', 'wdf_static',
-                        'wdf_stub_inferred', 'minifilter'}
+    dispatcher_modes = {'legacy_mj14', 'mj14_recursive', 'mj14_segment_scan',
+                        'wdf_static', 'wdf_stub_inferred', 'minifilter'}
     has_dispatcher = bool(set(modes) & dispatcher_modes)
     if has_dispatcher and ic == 0 and len(prims) >= 3 and score < 30 and not ms_inbox_signed:
         score = 30
@@ -4128,7 +4194,7 @@ def _csv_dump(results: list) -> str:
     return out.getvalue()
 
 
-VERSION = 'v2.9.9'
+VERSION = 'v2.10.0'
 
 USAGE_EPILOG = r"""
 examples:
