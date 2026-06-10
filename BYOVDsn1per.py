@@ -3499,7 +3499,8 @@ def perfect_score(result: dict) -> tuple:
     if has_dispatcher and ic == 0 and len(prims) >= 3 and score < 30 and not ms_inbox_signed:
         score = 30
 
-    if (has_dispatcher and ic >= 1 and 'PHYS_MEM_MAP' in prims
+    byovd_primitives = {'PHYS_MEM_MAP', 'PCI_CONFIG_RW', 'MSR_WRITE', 'PORT_IO'}
+    if (has_dispatcher and ic >= 1 and (set(prims) & byovd_primitives)
             and not ms_inbox_signed and score < 30):
         score = 30
 
@@ -4120,7 +4121,7 @@ def _csv_dump(results: list) -> str:
     return out.getvalue()
 
 
-VERSION = 'v2.9.7'
+VERSION = 'v2.9.8'
 
 USAGE_EPILOG = r"""
 examples:
