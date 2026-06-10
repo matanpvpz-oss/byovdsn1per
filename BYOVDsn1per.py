@@ -2973,9 +2973,11 @@ def _looks_like_ioctl(val: int) -> bool:
     function = (val >> 2) & 0xFFF
     if device_type == 0 or device_type == 0xFFFF:
         return False
-    if function == 0:
+    if (val & 0xFFFF) == 0:
         return False
-                                                                           
+    if function == 0 and device_type < 0x8000:
+        return False
+
     if 0x003C <= device_type <= 0x7FFF:
         return False
                                                                        
@@ -4194,7 +4196,7 @@ def _csv_dump(results: list) -> str:
     return out.getvalue()
 
 
-VERSION = 'v2.10.0'
+VERSION = 'v2.10.1'
 
 USAGE_EPILOG = r"""
 examples:
