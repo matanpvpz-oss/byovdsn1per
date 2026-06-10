@@ -4008,10 +4008,24 @@ def full_scan(driver_path: str, depth: int, no_flirt: bool, deep: bool, no_decom
         r['verify_load'] = signtool_kp(driver_path)
     return r
 
-def _doctor() -> int:
+def _sha256_file(path: str) -> str:
+    import hashlib
+    h = hashlib.sha256()
+    try:
+        with open(path, 'rb') as f:
+            for chunk in iter(lambda: f.read(65536), b''):
+                h.update(chunk)
+        return h.hexdigest()
+    except OSError:
+        return ''
+
+def _doctor(fix: bool = False) -> int:
+    import hashlib, shutil as _sh
+    issues = []
+    fixed = []
     py_ver = '.'.join(str(v) for v in sys.version_info[:3])
     py_ok = sys.version_info >= (3, 10)
-    print(f"{C.BOLD}BYOVDsn1per doctor{C.RESET}")
+    print(f"{C.BOLD}BYOVDsn1per doctor{C.RESET}  {'(fix mode)' if fix else '(diagnose only -- pass --fix to repair)'}")
     print()
     print(f"{C.BOLD}Python{C.RESET}")
     print(f"  version:  {C.GREEN if py_ok else C.YELLOW}{py_ver}{C.RESET}  ({sys.executable})")
@@ -4066,10 +4080,121 @@ def _doctor() -> int:
         except OSError as e:
             print(f"  {C.YELLOW}error reading dir: {e}{C.RESET}")
     print()
+    print(f"{C.BOLD}Installed binary integrity (hash check){C.RESET}")
+    source_path = os.path.abspath(__file__)
+    source_hash = _sha256_file(source_path)
+    install_dir = os.path.join(os.environ.get('LOCALAPPDATA', ''),
+                               'Programs', 'BYOVDsn1per')
+    installed_path = os.path.join(install_dir, 'BYOVDsn1per.py')
+    installed_hash = _sha256_file(installed_path)
+    print(f"  source:    {source_path}")
+    print(f"             sha256={source_hash[:16]}...  {VERSION}")
+    if not installed_hash:
+        print(f"  installed: {installed_path}")
+        print(f"             {C.YELLOW}NOT INSTALLED -- byovdsn1per command is not on PATH from this user account{C.RESET}")
+        issues.append('not-installed')
+        if fix and source_path != installed_path:
+            try:
+                os.makedirs(install_dir, exist_ok=True)
+                _sh.copy2(source_path, installed_path)
+                cmd_src = os.path.join(os.path.dirname(source_path), 'BYOVDsn1per.cmd')
+                if os.path.isfile(cmd_src):
+                    _sh.copy2(cmd_src, os.path.join(install_dir, 'BYOVDsn1per.cmd'))
+                    _sh.copy2(cmd_src, os.path.join(install_dir, 'byovdsn1per.cmd'))
+                print(f"  {C.GREEN}+ installed {VERSION} to {install_dir}{C.RESET}")
+                print(f"  {C.DIM}    NOTE: PATH update requires install.ps1 (run from repo dir){C.RESET}")
+                fixed.append('binary-deployed')
+            except OSError as e:
+                print(f"  {C.RED}- install failed: {e}{C.RESET}")
+    elif installed_hash == source_hash:
+        print(f"  installed: {installed_path}")
+        print(f"             {C.GREEN}sha256 match -- installed is current ({VERSION}){C.RESET}")
+    else:
+        print(f"  installed: {installed_path}")
+        print(f"             {C.YELLOW}sha256={installed_hash[:16]}...  STALE -- differs from source{C.RESET}")
+        issues.append('stale-binary')
+        if fix and source_path != installed_path:
+            try:
+                _sh.copy2(source_path, installed_path)
+                cmd_src = os.path.join(os.path.dirname(source_path), 'BYOVDsn1per.cmd')
+                if os.path.isfile(cmd_src):
+                    _sh.copy2(cmd_src, os.path.join(install_dir, 'BYOVDsn1per.cmd'))
+                    _sh.copy2(cmd_src, os.path.join(install_dir, 'byovdsn1per.cmd'))
+                new_hash = _sha256_file(installed_path)
+                print(f"  {C.GREEN}+ replaced installed binary with {VERSION}  (new sha256={new_hash[:16]}...){C.RESET}")
+                fixed.append('binary-updated')
+            except OSError as e:
+                print(f"  {C.RED}- update failed (need admin? try 'install.ps1' from repo): {e}{C.RESET}")
+    print()
+    print(f"{C.BOLD}Directory health{C.RESET}")
+    target_dirs = [
+        ('crawler', os.path.join(os.environ.get('APPDATA', '.'), 'BYOVDsn1per', 'crawler')),
+        ('sweep results', os.path.join(os.environ.get('APPDATA', '.'), 'BYOVDsn1per')),
+    ]
+    for label, d in target_dirs:
+        if os.path.isdir(d):
+            print(f"  {C.GREEN}+ {label}: {d}{C.RESET}")
+        else:
+            print(f"  {C.YELLOW}- {label}: missing ({d}){C.RESET}")
+            issues.append(f'missing-dir:{label}')
+            if fix:
+                try:
+                    os.makedirs(d, exist_ok=True)
+                    print(f"    {C.GREEN}+ created{C.RESET}")
+                    fixed.append(f'dir-created:{label}')
+                except OSError as e:
+                    print(f"    {C.RED}- failed: {e}{C.RESET}")
+    print()
+    print(f"{C.BOLD}Stale-cache cleanup{C.RESET}")
+    cache_locations = [
+        os.path.join(os.path.dirname(source_path), '__pycache__'),
+        os.path.join(install_dir, '__pycache__') if install_dir else None,
+    ]
+    stale_found = False
+    for c in cache_locations:
+        if c and os.path.isdir(c):
+            stale_found = True
+            print(f"  {C.YELLOW}- stale: {c}{C.RESET}")
+            issues.append('stale-cache')
+            if fix:
+                try:
+                    _sh.rmtree(c)
+                    print(f"    {C.GREEN}+ removed{C.RESET}")
+                    fixed.append('cache-cleared')
+                except OSError as e:
+                    print(f"    {C.RED}- failed: {e}{C.RESET}")
+    if not stale_found:
+        print(f"  {C.GREEN}+ no stale __pycache__ found{C.RESET}")
+    print()
+    print(f"{C.BOLD}CVE_DATABASE structural integrity{C.RESET}")
+    cve_bad = []
+    for cve in CVE_DATABASE:
+        missing = [k for k in ('cve', 'name', 'year', 'signer_match',
+                               'dispatcher_signature', 'primitives_gained')
+                   if k not in cve]
+        if missing:
+            cve_bad.append((cve.get('cve', '<unknown>'), missing))
+    if cve_bad:
+        for cve_id, missing in cve_bad:
+            print(f"  {C.YELLOW}- {cve_id}: missing fields {missing}{C.RESET}")
+        issues.append('cve-db-corrupt')
+    else:
+        print(f"  {C.GREEN}+ all {len(CVE_DATABASE)} entries have required fields{C.RESET}")
+    print()
     print(f"{C.BOLD}Environment{C.RESET}")
     for var in ('APPDATA', 'LOCALAPPDATA', 'USERPROFILE', 'TEMP'):
         print(f"  %{var}%: {os.environ.get(var, '(unset)')}")
-    return 0
+    print()
+    print(f"{C.BOLD}Summary{C.RESET}")
+    print(f"  issues found:    {len(issues)}")
+    if fix:
+        print(f"  issues fixed:    {len(fixed)}")
+        remaining = len(issues) - len(fixed)
+        col = C.GREEN if remaining == 0 else C.YELLOW
+        print(f"  {col}remaining:       {remaining}{C.RESET}")
+    elif issues:
+        print(f"  {C.DIM}re-run with --fix to repair: byovdsn1per --doctor --fix{C.RESET}")
+    return 0 if not issues or (fix and len(fixed) >= len(issues)) else 1
 
 
 def _list_crawler(out_dir: str) -> int:
@@ -4321,7 +4446,7 @@ def _csv_dump(results: list) -> str:
     return out.getvalue()
 
 
-VERSION = 'v2.10.9'
+VERSION = 'v2.10.10'
 
 USAGE_EPILOG = r"""
 =========================================================================
@@ -4494,6 +4619,8 @@ def main():
     shortcut = p.add_argument_group('Standalone shortcuts (single driver, no full scan)')
     shortcut.add_argument('--doctor', action='store_true',
                           help='verify install: Python version, idalib, signtool/PowerShell, paths, crawler dir')
+    shortcut.add_argument('--fix', action='store_true',
+                          help='[with --doctor] auto-repair: redeploy stale installed binary, create missing dirs, clear stale caches')
     shortcut.add_argument('--examples', action='store_true',
                           help='print the worked examples block and exit (same as the --help epilog)')
     shortcut.add_argument('--list', action='store_true',
@@ -4590,7 +4717,7 @@ def main():
             print(f"  {col}{mark} {r}{C.RESET}")
         return 0
     if args.doctor:
-        return _doctor()
+        return _doctor(fix=getattr(args, 'fix', False))
     if args.examples:
         return _print_examples()
     if getattr(args, 'list', False):
