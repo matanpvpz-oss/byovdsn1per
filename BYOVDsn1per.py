@@ -3590,7 +3590,11 @@ def perfect_score(result: dict) -> tuple:
     weak_gates = {'WEAK_BITNESS_CHECK_ONLY'}
     detected_hard = set(gates) & hard_gates
     if not gates or detected_hard - weak_gates == set():
-        if not (ms_inbox_early and not has_strong_cve):
+        suspicious_open = (
+            (ms_inbox_early and not has_strong_cve)
+            or ('unresolved' in modes and not has_strong_cve)
+        )
+        if not suspicious_open:
             score += 25
     elif detected_hard:
         score -= min(20, 10 * len(detected_hard))
@@ -4249,7 +4253,7 @@ def _csv_dump(results: list) -> str:
     return out.getvalue()
 
 
-VERSION = 'v2.10.4'
+VERSION = 'v2.10.5'
 
 USAGE_EPILOG = r"""
 examples:
