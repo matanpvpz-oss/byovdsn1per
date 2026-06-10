@@ -1226,6 +1226,28 @@ CVE_DATABASE = [
         'pocs_known': ['https://www.loldrivers.io/drivers/gofly64'],
         'notes': 'Wandou (Chinese vendor) GoFly64 hardware-access driver. 27-IOCTL surface in device 0x12. MAGIC_COOKIE+PID_CHECK gates exist but bypassable; PROCESS_KILL primitive directly exposed. Used in EDR-bypass workflows. wandouip.com email-signer substring is distinctive.',
     },
+    {
+        'cve': 'PCTCORE64-PCTOOLS',
+        'name': 'PCTcore64.sys (PC Tools / Symantec spyware-suite kernel core)',
+        'year': 2009,
+        'sha256_exact': {'c76dd87891e3e30db2aed057e7b04c19ca264f434c21f68a7a2d9b17a97aff39'},
+        'signer_match': 'PC Tools',
+        'distinctive_signer': True,
+        'signer_required': True,
+        'dispatcher_signature': {
+            'device_types': set(),
+            'ioctl_codes': {0x8000023c, 0x8000032c, 0x80000330, 0x80000334,
+                            0x8000033c, 0x80000340, 0x80000344, 0x8000034c,
+                            0x80000350, 0x800004b0},
+            'min_overlap': 3,
+        },
+        'primitives_gained': ['PHYS_MEM_MAP', 'PROCESS_KILL', 'REGISTRY_WRITE',
+                              'FILE_WRITE', 'BUGCHECK', 'CALLBACK_REG', 'MINIFILTER',
+                              'PROCESS_ATTACH', 'TOKEN_STEAL', 'MDL_PRIMITIVE',
+                              'KERNEL_SYMBOL_RES', 'HANDLE_DUP'],
+        'pocs_known': ['https://www.loldrivers.io/drivers/pctcore64'],
+        'notes': 'PC Tools (acquired by Symantec) anti-spyware-suite kernel-core driver, VS2008 toolchain. 67-IOCTL surface in custom device_type 0x8000 with full primitive coverage (12 classes). PID_CHECK + STRING_COMPARE + TRUST_DB_NULL gates exist but the PC Tools service-PID is well-known; used in EDR-bypass workflows.',
+    },
 ]
 
 def _compute_polluted_device_types(db, threshold=3):
@@ -3487,7 +3509,8 @@ def _ida_scan(driver_path: str, depth: int = 3, no_flirt: bool = False,
             if not result['modes_resolved']:
                 result['modes_resolved'] = ['unresolved']
         finally:
-            idapro.close_database()
+            with _silence_idalib_noise():
+                idapro.close_database()
     except Exception as e:
         result['error'] = f'{type(e).__name__}: {e}'
     finally:
@@ -5169,7 +5192,7 @@ def _csv_dump(results: list) -> str:
     return out.getvalue()
 
 
-VERSION = 'v2.10.20'
+VERSION = 'v2.10.21'
 
 USAGE_EPILOG = r"""
 =========================================================================
@@ -5602,13 +5625,17 @@ def main():
                 print(f"open rc={rc}"); return 1
             import ida_hexrays
             if not ida_hexrays.init_hexrays_plugin():
-                print("hexrays plugin not available"); idapro.close_database(); return 1
+                print("hexrays plugin not available")
+                with _silence_idalib_noise():
+                    idapro.close_database()
+                return 1
             cf = ida_hexrays.decompile(ea)
             if cf:
                 print(str(cf))
             else:
                 print("decompile failed")
-            idapro.close_database()
+            with _silence_idalib_noise():
+                idapro.close_database()
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
         return 0
