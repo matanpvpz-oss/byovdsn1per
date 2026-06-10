@@ -3499,6 +3499,10 @@ def perfect_score(result: dict) -> tuple:
     if has_dispatcher and ic == 0 and len(prims) >= 3 and score < 30 and not ms_inbox_signed:
         score = 30
 
+    if (has_dispatcher and ic >= 1 and 'PHYS_MEM_MAP' in prims
+            and not ms_inbox_signed and score < 30):
+        score = 30
+
     if (h.get('force_integrity') and h.get('guard_cf') and not h.get('init_wx')
             and 'minifilter' in modes and len(prims) >= 3
             and score < 20):
@@ -4116,7 +4120,7 @@ def _csv_dump(results: list) -> str:
     return out.getvalue()
 
 
-VERSION = 'v2.9.6'
+VERSION = 'v2.9.7'
 
 USAGE_EPILOG = r"""
 examples:
