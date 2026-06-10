@@ -147,12 +147,14 @@ CVE_DATABASE = [
         'cve': 'CVE-2024-21338',
         'name': 'appid.sys (Lazarus FudModule rootkit)',
         'year': 2024,
-        'sha256_exact': {'7031fec4cf04d7e4a395d8b48da41e8aab39df2b48bb55b7fcd45ad9e3c2b3a8'},
-                                                                          
+        'sha256_exact': {'7031fec4cf04d7e4a395d8b48da41e8aab39df2b48bb55b7fcd45ad9e3c2b3a8',
+                         '4f89978e07580f8e2a2af67dba970b68228273c64736e16fa6bb3f1b7f25b051'},
         'signer_match': 'CN=MICROSOFT WINDOWS,',
         'dispatcher_signature': {
             'device_types': {0x0022},
-            'ioctl_codes': {0x00225348, 0x00225358, 0x00229378, 0x00229380},
+            'ioctl_codes': {0x00225348, 0x00225358, 0x00229378, 0x00229380,
+                            0x00225804, 0x00225818, 0x0022581c, 0x00225820,
+                            0x00229800, 0x00229808, 0x0022a000, 0x0022a008},
             'min_overlap': 2,
         },
         'primitives_gained': ['DSE_DISABLE', 'CALLBACK_REG'],
@@ -3490,7 +3492,7 @@ def perfect_score(result: dict) -> tuple:
     sig_subject = ((result.get('signing') or {}).get('SUBJECT') or '').upper()
     ms_inbox_signed = ('CN=MICROSOFT WINDOWS,' in sig_subject
                        or sig_subject.startswith('CN=MICROSOFT WINDOWS,'))
-    if ms_inbox_signed and ic <= 1:
+    if ms_inbox_signed and ic <= 3:
         score -= 25
 
     dispatcher_modes = {'legacy_mj14', 'mj14_recursive', 'wdf_static',
@@ -3508,6 +3510,11 @@ def perfect_score(result: dict) -> tuple:
             and 'minifilter' in modes and len(prims) >= 3
             and score < 20):
         score = 20
+
+    cve_matches = result.get('cve_matches', []) or []
+    cve_confs = {m.get('confidence', 'LOW') for m in cve_matches}
+    if ('CONFIRMED' in cve_confs or 'HIGH' in cve_confs) and score < 50:
+        score = 50
 
     score = max(0, min(score, cap))
     if score >= 90:   tier = 'PERFECT'
@@ -4121,7 +4128,7 @@ def _csv_dump(results: list) -> str:
     return out.getvalue()
 
 
-VERSION = 'v2.9.8'
+VERSION = 'v2.9.9'
 
 USAGE_EPILOG = r"""
 examples:
@@ -4435,10 +4442,9 @@ def main():
                               args.no_decompile, args.verify_load,
                               offline=args.offline_mode)
             r['path'] = str(d)
+            r['cve_matches'] = match_cves(r)
             sc, tr = perfect_score(r)
             r['_score'], r['_tier'] = sc, tr
-            if args.poc:
-                r['cve_matches'] = match_cves(r)
             scans.append(r)
         print()
         print(diff_drivers(scans[0], scans[1]))
@@ -4552,11 +4558,10 @@ def main():
                                   args.deep, args.no_decompile, args.verify_load,
                                   offline=args.offline_mode)
                 r['path'] = str(b)
+                r['cve_matches'] = match_cves(r)
                 sc, tr = perfect_score(r)
                 r['_score'] = sc
                 r['_tier'] = tr
-                if args.poc:
-                    r['cve_matches'] = match_cves(r)
                 if args.strings:
                     s = extract_strings(str(b))
                     if 'top_ascii' in s:
@@ -4683,12 +4688,10 @@ def main():
         r = full_scan(str(drv), args.depth, args.no_flirt, args.deep, args.no_decompile,
                       args.verify_load, offline=args.offline_mode)
     r['path'] = str(drv)
+    r['cve_matches'] = match_cves(r)
     sc, tr = perfect_score(r)
     r['_score'] = sc
     r['_tier'] = tr
-                                                                 
-    if args.poc:
-        r['cve_matches'] = match_cves(r)
                                                                           
     if args.strings:
         s = extract_strings(str(drv))
