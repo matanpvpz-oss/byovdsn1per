@@ -1,5 +1,6 @@
                       
 import argparse
+import contextlib
 import datetime
 import hashlib
 import json
@@ -32,12 +33,24 @@ _IDAPRO_AVAILABLE = None
 _IDAPRO_ERROR = None
 
 
+@contextlib.contextmanager
+def _silence_idalib_noise():
+    devnull = open(os.devnull, 'w')
+    saved_stdout, saved_stderr = sys.stdout, sys.stderr
+    sys.stdout, sys.stderr = devnull, devnull
+    try:
+        yield
+    finally:
+        sys.stdout, sys.stderr = saved_stdout, saved_stderr
+        devnull.close()
+
 def _idapro_available() -> bool:
     global _IDAPRO_AVAILABLE, _IDAPRO_ERROR
     if _IDAPRO_AVAILABLE is not None:
         return _IDAPRO_AVAILABLE
     try:
-        import idapro
+        with _silence_idalib_noise():
+            import idapro
         _IDAPRO_AVAILABLE = True
     except Exception as e:
         _IDAPRO_AVAILABLE = False
@@ -1192,6 +1205,26 @@ CVE_DATABASE = [
         'primitives_gained': ['PHYS_MEM_MAP', 'PORT_IO', 'PCI_CONFIG_RW'],
         'pocs_known': ['https://www.loldrivers.io/drivers/corsair-llaccess'],
         'notes': 'Corsair Link low-level hardware-access driver. WHQL-signed; tight PHYS_MEM_MAP primitives_required guard vs generic WHQL.',
+    },
+    {
+        'cve': 'GOFLY64-WANDOU',
+        'name': 'GoFly64.sys (Wandou Chinese-vendor hardware-access driver)',
+        'year': 2020,
+        'sha256_exact': {'2fdfdd13a0c548bb68c9d5aa8599a9265d4659da3e237fe7a42ac6ac06b9a06a'},
+        'signer_match': 'wandouip',
+        'distinctive_signer': True,
+        'signer_required': True,
+        'dispatcher_signature': {
+            'device_types': set(),
+            'ioctl_codes': {0x12221a, 0x12221e, 0x122222, 0x122226, 0x12222a,
+                            0x12222e, 0x122232, 0x122236, 0x12223a, 0x12223e},
+            'min_overlap': 3,
+        },
+        'primitives_gained': ['PHYS_MEM_MAP', 'PROCESS_KILL', 'FILE_WRITE',
+                              'BUGCHECK', 'CALLBACK_REG', 'MDL_PRIMITIVE',
+                              'KERNEL_SYMBOL_RES', 'HANDLE_DUP'],
+        'pocs_known': ['https://www.loldrivers.io/drivers/gofly64'],
+        'notes': 'Wandou (Chinese vendor) GoFly64 hardware-access driver. 27-IOCTL surface in device 0x12. MAGIC_COOKIE+PID_CHECK gates exist but bypassable; PROCESS_KILL primitive directly exposed. Used in EDR-bypass workflows. wandouip.com email-signer substring is distinctive.',
     },
 ]
 
@@ -3219,8 +3252,9 @@ def _ida_scan(driver_path: str, depth: int = 3, no_flirt: bool = False,
         tmp_drv = tmp / src.name
         shutil.copy2(src, tmp_drv)
 
-        import idapro
-        rc = idapro.open_database(str(tmp_drv), run_auto_analysis=True)
+        with _silence_idalib_noise():
+            import idapro
+            rc = idapro.open_database(str(tmp_drv), run_auto_analysis=True)
         if rc != 0:
             return {**result, 'error': f'idapro.open_database rc={rc}'}
 
@@ -5135,7 +5169,7 @@ def _csv_dump(results: list) -> str:
     return out.getvalue()
 
 
-VERSION = 'v2.10.19'
+VERSION = 'v2.10.20'
 
 USAGE_EPILOG = r"""
 =========================================================================
@@ -5561,8 +5595,9 @@ def main():
         tmp = Path(tempfile.mkdtemp(prefix='snipr_'))
         try:
             shutil.copy2(args.decompile, tmp / Path(args.decompile).name)
-            import idapro
-            rc = idapro.open_database(str(tmp / Path(args.decompile).name), run_auto_analysis=True)
+            with _silence_idalib_noise():
+                import idapro
+                rc = idapro.open_database(str(tmp / Path(args.decompile).name), run_auto_analysis=True)
             if rc != 0:
                 print(f"open rc={rc}"); return 1
             import ida_hexrays
