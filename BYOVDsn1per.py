@@ -3755,7 +3755,7 @@ def _extract_jumptable_cases_from_line(line: str):
     out = set()
     if 'case' not in line:
         return out
-                                                                   
+
     if 'default case' in line:
         return out
     m = _JT_CASE_RE.search(line)
@@ -3780,8 +3780,12 @@ def _extract_jumptable_cases_from_line(line: str):
                 if hi - lo > 4096:
                     out.add(lo); out.add(hi)
                 else:
-                    for v in range(lo, hi + 1):
-                        out.add(v & 0xFFFFFFFF)
+                    aligned = {v & 0xFFFFFFFF for v in range(lo, hi + 1, 4)}
+                    if hi & 3:
+                        aligned.add(hi & 0xFFFFFFFF)
+                    if not aligned:
+                        aligned = {v & 0xFFFFFFFF for v in range(lo, hi + 1)}
+                    out.update(aligned)
         except (TypeError, ValueError):
             continue
     return out
@@ -3894,10 +3898,17 @@ def _enumerate_dispatch_ioctls(handler_ea, max_depth=3):
                         )
                         if ranges_ok:
                             cap = min(val, 0x100)
-                            for j in range(cap + 1):
+                            emitted_aligned = 0
+                            for j in range(0, cap + 1, 4):
                                 cand = (base + j) & 0xFFFFFFFF
                                 if _looks_like_ioctl(cand):
                                     _emit(cand, d)
+                                    emitted_aligned += 1
+                            if emitted_aligned == 0:
+                                for j in range(cap + 1):
+                                    cand = (base + j) & 0xFFFFFFFF
+                                    if _looks_like_ioctl(cand):
+                                        _emit(cand, d)
                 if running_sum is not None and has_cj:
                     full = (running_sum + val) & 0xFFFFFFFF
                     if _looks_like_ioctl(full):
@@ -5192,7 +5203,7 @@ def _csv_dump(results: list) -> str:
     return out.getvalue()
 
 
-VERSION = 'v2.10.21'
+VERSION = 'v2.10.22'
 
 USAGE_EPILOG = r"""
 =========================================================================
