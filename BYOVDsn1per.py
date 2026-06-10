@@ -581,6 +581,7 @@ CVE_DATABASE = [
             '846b2f282925d7ddccd41f46f0048bc1f424fe44ccb110ed45ece8637fbece5d',
         },
         'signer_match': 'Microsoft Windows Hardware Compatibility Publisher',
+        'signer_required': True,
         'dispatcher_signature': {
             'device_types': {0x0022},
             'ioctl_codes': {0x22e008, 0x22e010},
@@ -633,7 +634,10 @@ def match_cves(result: dict, min_confidence: str = 'LOW') -> list:
                 score += 2
                 evidence.append(f'signer:{cve["signer_match"]}')
             signer_hit = True
-                                  
+
+        if cve.get('signer_required') and not signer_hit:
+            continue
+
         disp = cve.get('dispatcher_signature', {})
         overlap = len(ioctls_set & set(disp.get('ioctl_codes', set())))
         if overlap >= disp.get('min_overlap', 1) and disp.get('ioctl_codes'):
@@ -4282,7 +4286,7 @@ def _csv_dump(results: list) -> str:
     return out.getvalue()
 
 
-VERSION = 'v2.10.7'
+VERSION = 'v2.10.8'
 
 USAGE_EPILOG = r"""
 =========================================================================
