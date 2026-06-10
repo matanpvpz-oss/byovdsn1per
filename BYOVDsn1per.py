@@ -637,6 +637,102 @@ CVE_DATABASE = [
         ],
         'notes': 'Lenovo PC Manager Recovery Tool Provider driver. PsLookupProcessByProcessId + ZwTerminateProcess exposed via IOCTL 0x222014, no PID/cookie/SID gate. Production Lenovo cert valid 2015-2018, timestamped before expiry so still loads. ZwSetValueKey + ZwCreateKey also exposed -- can rewrite HKLM\\System\\CurrentControlSet keys from SYSTEM context (EDR-disable enabler).',
     },
+    {
+        'cve': 'AMD-BIOSTOOL-COMMON',
+        'name': 'AMD BiosToolCommonDriver -- PCI config R/W + PHYS_MEM_MAP',
+        'year': 2020,
+        'sha256_exact': {'177227f68cc28ee7726381b95f7d2215da35be3750157ebcb7e113201059026c'},
+        'signer_match': 'ADVANCED MICRO DEVICES',
+        'distinctive_signer': True,
+        'signer_required': True,
+        'dispatcher_signature': {
+            'device_types': {0x9C40},
+            'ioctl_codes': set(),
+            'min_overlap': 0,
+        },
+        'primitives_gained': ['PHYS_MEM_MAP', 'PCI_CONFIG_RW', 'REGISTRY_WRITE'],
+        'pocs_known': [
+            'https://github.com/The-Sword-of-Constantine/UsingBYOVD',
+        ],
+        'notes': 'AMD BIOS-utility driver bundled as a public BYOVD specimen. Production AMD cert. PHYS_MEM_MAP + PCI_CONFIG_RW + REGISTRY_WRITE primitives via IOCTL surface. MAGIC_COOKIE gate exists but cookie is static.',
+    },
+    {
+        'cve': 'CORMEM-TELEDYNE',
+        'name': 'Teledyne CorMem -- BUS_ADDR_TRANSLATE + PHYS_MEM_MAP physical-memory driver',
+        'year': 2020,
+        'sha256_exact': {'40c855d20d497823716a08a443dc85846233226985ee653770bc3b245cf2ed0f'},
+        'signer_match': 'TELEDYNE',
+        'distinctive_signer': True,
+        'signer_required': True,
+        'dispatcher_signature': {
+            'device_types': set(),
+            'ioctl_codes': set(),
+            'min_overlap': 0,
+        },
+        'primitives_gained': ['PHYS_MEM_MAP', 'BUS_ADDR_TRANSLATE', 'MDL_PRIMITIVE'],
+        'pocs_known': [
+            'https://github.com/The-Sword-of-Constantine/UsingBYOVD',
+        ],
+        'notes': 'Teledyne Digital Imaging industrial-camera driver shipped in The-Sword-of-Constantine UsingBYOVD repo. PID_CHECK + TRUST_DB_NULL gates exist but bypassable. PHYS_MEM_MAP via HalTranslateBusAddress chain.',
+    },
+    {
+        'cve': 'GGPROTECT64-FAMILY',
+        'name': 'GGProtect64 -- anti-cheat-class WHQL BYOVD with full primitive surface',
+        'year': 2021,
+        'sha256_exact': {'0aa69aee93c6be9bc82680a7df99c114591038ae02e6666fc6e42acb09643111'},
+        'signer_match': 'Microsoft Windows Hardware Compatibility Publisher',
+        'signer_required': True,
+        'dispatcher_signature': {
+            'device_types': set(),
+            'ioctl_codes': set(),
+            'min_overlap': 0,
+        },
+        'primitives_gained': ['PHYS_MEM_MAP', 'KERNEL_EXEC', 'PROCESS_KILL',
+                              'CALLBACK_REG', 'MINIFILTER', 'TOKEN_STEAL'],
+        'pocs_known': [
+            'https://github.com/The-Sword-of-Constantine/UsingBYOVD',
+        ],
+        'notes': 'WHQL-signed anti-cheat-shaped driver with the full BYOVD primitive surface (12+ classes detected). Encrypted dispatcher (mhyprot2-like) -- v2.10.14 density-inferred fallback finds it.',
+    },
+    {
+        'cve': 'PGRHOSTCONTROL-FLIR',
+        'name': 'FLIR PGRHostControl -- industrial-camera BYOVD with PHYS_MEM_MAP',
+        'year': 2020,
+        'sha256_exact': {'4b0e9834dd672e4ce81464d8887c71f9a0942140557cd0ad321da9a1aa849959'},
+        'signer_match': 'FLIR',
+        'distinctive_signer': True,
+        'signer_required': True,
+        'dispatcher_signature': {
+            'device_types': set(),
+            'ioctl_codes': set(),
+            'min_overlap': 0,
+        },
+        'primitives_gained': ['PHYS_MEM_MAP', 'BUS_ADDR_TRANSLATE', 'BUGCHECK'],
+        'pocs_known': [
+            'https://github.com/The-Sword-of-Constantine/UsingBYOVD',
+        ],
+        'notes': 'FLIR Integrated Imaging Solutions camera driver. Open dispatcher (no gates), PHYS_MEM_MAP + BUS_ADDR_TRANSLATE for hardware register access.',
+    },
+    {
+        'cve': 'PROCESSCTR-FAMILY',
+        'name': 'ProcessCtr -- arbitrary process kill + kernel-exec primitive (Chinese)',
+        'year': 2021,
+        'sha256_exact': {'d64eeb940daffdc8327fb18b160c20e539088cf8407813655f59efa9fdf0022e'},
+        'signer_match': 'CN=',
+        'distinctive_signer': False,
+        'dispatcher_signature': {
+            'device_types': set(),
+            'ioctl_codes': set(),
+            'min_overlap': 0,
+        },
+        'primitives_gained': ['PROCESS_KILL', 'KERNEL_EXEC', 'FILE_WRITE',
+                              'REGISTRY_WRITE', 'TOKEN_STEAL', 'PHYS_MEM_MAP',
+                              'CALLBACK_REG'],
+        'pocs_known': [
+            'https://github.com/The-Sword-of-Constantine/UsingBYOVD',
+        ],
+        'notes': 'Chinese-vendor research/utility driver weaponised as BYOVD. Full primitive surface incl. PROCESS_KILL + KERNEL_EXEC + FILE_WRITE + REGISTRY_WRITE. No gates. STRONG candidate.',
+    },
 ]
 
 def _compute_polluted_device_types(db, threshold=3):
@@ -2807,13 +2903,16 @@ def _ida_scan(driver_path: str, depth: int = 3, no_flirt: bool = False,
                     result['ioctls'] = [hex(i) for i in sorted(best_ioctls)]
                     result['ioctl_count'] = len(best_ioctls)
 
-            if (result['mj14_handler'] and result['ioctl_count'] == 0
-                    and not need_stub_fallback):
+            no_mj14 = not result['mj14_handler']
+            wrong_mj14 = result['mj14_handler'] and result['ioctl_count'] == 0
+            if (no_mj14 or wrong_mj14) and not need_stub_fallback:
                 best_ea, best_ioctls = _find_high_ioctl_density_func(min_ioctls=3)
                 if best_ea and best_ioctls:
                     result['mj14_handler'] = hex(best_ea)
                     if 'density_inferred' not in result['modes_resolved']:
                         result['modes_resolved'].append('density_inferred')
+                    if 'unresolved' in result['modes_resolved']:
+                        result['modes_resolved'].remove('unresolved')
                     result['ioctls'] = [hex(i) for i in sorted(best_ioctls)]
                     result['ioctl_count'] = len(best_ioctls)
 
@@ -4576,7 +4675,7 @@ def _csv_dump(results: list) -> str:
     return out.getvalue()
 
 
-VERSION = 'v2.10.13'
+VERSION = 'v2.10.14'
 
 USAGE_EPILOG = r"""
 =========================================================================
