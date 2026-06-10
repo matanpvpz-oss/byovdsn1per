@@ -562,6 +562,36 @@ CVE_DATABASE = [
         ],
         'notes': 'Nmap.org npcap WHQL-signed. Magic-cookie gate (FsContext->Magic=NPCN) is bypassed by simply opening \\Device\\NPCAP first. CVE-2023-37252 is the npcap-svc LPE; the kernel-side surface is the BYOVD-tier exposure.',
     },
+    {
+        'cve': 'POISONX-FAMILY',
+        'name': 'PoisonX research BYOVD process-killer family (PoisonX1..18)',
+        'year': 2023,
+        'sha256_exact': {
+            '103b1bbe9d257e3ae6b83befdc53cad0e5432ade535b1f85dd6fddd4356d4898',
+            '1ca2f1c00d54b14f0f50d54f11cb654eddcc0228967f9942a92f544c75d5bb37',
+            '1d9ae1467e604469798d272755afcf845b5efcd588863ad9e2aa3e3cf112985a',
+            '40a46b17a8ccb3104b079716d764ceeda1f8431cb6582308f59af5802fe82fda',
+            '4948e89b532804590490aaae41f4b582a89592c931e557b6ddfff0b8d6ee8cf5',
+            '50870b82104a309c107ad6ed50c023324fd73b6908a52f6070f47b8d247323c9',
+            '63eaa6be7c2f220af0f5fdf3b232f18908777262ecc0919796a92438aec74b89',
+            '6452ca681dd818a36ec538fe2d83a795f98e14970855964520294726dedd742b',
+            '6f24ed64cba4ed0901592770a3aead821317a85efa886bd51f1afc6cb1166990',
+            '6fbaad2f00afaa94723fa7d5bd46e7ea4babb7ce478a8e7229ce7bd4b85e0f51',
+            '83db6a37d9ec9923ca2aa677b4f4d8b67c8b2468046d21136a57ffe92eba6cac',
+            '846b2f282925d7ddccd41f46f0048bc1f424fe44ccb110ed45ece8637fbece5d',
+        },
+        'signer_match': 'Microsoft Windows Hardware Compatibility Publisher',
+        'dispatcher_signature': {
+            'device_types': {0x0022},
+            'ioctl_codes': {0x22e008, 0x22e010},
+            'min_overlap': 2,
+        },
+        'primitives_gained': ['PROCESS_KILL', 'PROCESS_ATTACH'],
+        'pocs_known': [
+            'https://github.com/CrazyJesus/PoisonDriver',
+        ],
+        'notes': 'Public Chinese research BYOVD family. 18 variants seen with identical IOCTL pair {0x22e008, 0x22e010} doing ZwOpenProcess(PROCESS_ALL_ACCESS)+ZwTerminateProcess on any caller-supplied PID, zero gates, WHQL-signed. Designed for EDR/AV neutralization. The pair-overlap match (min_overlap=2) cleanly distinguishes this family without firing on unrelated drivers.',
+    },
 ]
 
 def _compute_polluted_device_types(db, threshold=3):
@@ -4252,7 +4282,7 @@ def _csv_dump(results: list) -> str:
     return out.getvalue()
 
 
-VERSION = 'v2.10.6'
+VERSION = 'v2.10.7'
 
 USAGE_EPILOG = r"""
 =========================================================================
