@@ -4740,7 +4740,7 @@ def _doctor(fix: bool = False) -> int:
         print(f"  {C.YELLOW}import idapro: FAIL{C.RESET}  ({_IDAPRO_ERROR})")
         print(f"  {C.DIM}install: pip install idapro    (from your IDA install directory){C.RESET}")
         print(f"  {C.DIM}IDA-free modes that still work:{C.RESET}")
-        print(f"  {C.DIM}    --quick, --hvci-only, --sign-verify, --hashes-only, --imports-only,{C.RESET}")
+        print(f"  {C.DIM}    --quick, --hvci-only, --sign-verify, --hashes-only,{C.RESET}")
         print(f"  {C.DIM}    --cve-list, --crawl, --deepcrawl, --restart, --list,{C.RESET}")
         print(f"  {C.DIM}    --list-default-roots, --doctor{C.RESET}")
         print(f"  {C.DIM}    --diff / --sweep ONLY when combined with --quick{C.RESET}")
@@ -4956,13 +4956,7 @@ def _print_quickstart() -> int:
     print(f"  {C.DIM}sweep results -> {appdata}\\BYOVDsn1per\\sweep_<timestamp>.json{C.RESET}")
     print(f"  {C.DIM}crawler dir   -> {appdata}\\BYOVDsn1per\\crawler\\{C.RESET}")
     print()
-    print(f"  Full flag list:           {C.BOLD}byovdsn1per --help{C.RESET}")
-    print(f"  Worked examples:          {C.BOLD}byovdsn1per --examples{C.RESET}")
-    return 0
-
-
-def _print_examples() -> int:
-    print(USAGE_EPILOG.strip())
+    print(f"  Full flag list + examples: {C.BOLD}byovdsn1per --help{C.RESET}")
     return 0
 
 
@@ -5141,7 +5135,7 @@ def _csv_dump(results: list) -> str:
     return out.getvalue()
 
 
-VERSION = 'v2.10.18'
+VERSION = 'v2.10.19'
 
 USAGE_EPILOG = r"""
 =========================================================================
@@ -5201,19 +5195,18 @@ ADD-ONS BY MODE -- only flags listed under a mode work with that mode
     --offline-mode     no subprocess (skip PowerShell/signtool); PE-only
 
   With --decompile:
-    --ea ADDR          (required) effective address to decompile
-    --no-flirt         skip FLIRT signature application
+    --ea ADDR            (required) effective address to decompile
 
   Standalone shortcuts -- ignore DRIVER, exit immediately:
     --doctor             verify install + paths
-    --examples           print this examples block and exit
+    --doctor --fix       auto-repair: redeploy binary, create dirs, clear caches
+    --update             one-shot self-update from source dir to installed dir
     --list               summarise the crawler dir
     --last-sweep         re-display most recent sweep JSON
     --show FILE          re-display any sweep JSON
     --hvci-only DRIVER   HVCI flag verdict only
     --sign-verify DRIVER signtool /kp /v only
     --hashes-only DRIVER MD5/SHA1/SHA256/imphash only
-    --imports-only DRIVER PE imports table only
     --cve-list           dump the CVE matcher database
     --list-default-roots show what --crawl walks by default
 
@@ -5318,8 +5311,6 @@ def main():
                           help='[with --doctor] auto-repair: redeploy stale installed binary, create missing dirs, clear stale caches')
     shortcut.add_argument('--update', action='store_true',
                           help='self-update: hash-verify and redeploy this source to %%LOCALAPPDATA%%\\Programs\\BYOVDsn1per\\ (no diagnose)')
-    shortcut.add_argument('--examples', action='store_true',
-                          help='print the worked examples block and exit (same as the --help epilog)')
     shortcut.add_argument('--list', action='store_true',
                           help='list what is in the crawler dir (count, size, top signers) and exit')
     shortcut.add_argument('--last-sweep', action='store_true',
@@ -5329,7 +5320,6 @@ def main():
     shortcut.add_argument('--hvci-only', action='store_true', help='print HVCI flag verdict and exit')
     shortcut.add_argument('--sign-verify', action='store_true', help='run signtool /kp /v and exit')
     shortcut.add_argument('--hashes-only', action='store_true', help='print MD5/SHA1/SHA256/imphash and exit')
-    shortcut.add_argument('--imports-only', action='store_true', help='dump PE imports table and exit')
     shortcut.add_argument('--cve-list', action='store_true', help='list all CVEs in the matcher database and exit')
 
     addon = p.add_argument_group(
@@ -5360,11 +5350,6 @@ def main():
                         help='[single|sweep] skip drivers > N MB (default 1.5)')
     tuning.add_argument('--filter', choices=['perfect', 'partial', 'any'], default='any',
                         help='[sweep-only] only show drivers >= tier')
-    tuning.add_argument('--no-flirt', action='store_true',
-                        help='[single|sweep|decompile] skip FLIRT sigs')
-    tuning.add_argument('--no-decompile', action='store_true',
-                        help='[single|sweep] skip Hexrays decompile in --deep mode')
-
     output = p.add_argument_group('Output')
     output.add_argument('--output', choices=['table', 'json', 'markdown', 'csv'], default='table',
                         help='output format (default: table)')
@@ -5417,8 +5402,6 @@ def main():
         return _doctor(fix=getattr(args, 'fix', False))
     if args.update:
         return _update()
-    if args.examples:
-        return _print_examples()
     if getattr(args, 'list', False):
         return _list_crawler(args.crawl_out)
     if args.last_sweep:
@@ -5541,8 +5524,8 @@ def main():
             if args.quick:
                 r = quick_scan(str(d), offline=args.offline_mode)
             else:
-                r = full_scan(str(d), args.depth, args.no_flirt, args.deep,
-                              args.no_decompile, args.verify_load,
+                r = full_scan(str(d), args.depth, False, args.deep,
+                              False, args.verify_load,
                               offline=args.offline_mode)
             r['path'] = str(d)
             r['cve_matches'] = match_cves(r)
@@ -5659,8 +5642,8 @@ def main():
                 if args.quick:
                     r = quick_scan(str(b), offline=args.offline_mode)
                 else:
-                    r = full_scan(str(b), args.depth, args.no_flirt,
-                                  args.deep, args.no_decompile, args.verify_load,
+                    r = full_scan(str(b), args.depth, False,
+                                  args.deep, False, args.verify_load,
                                   offline=args.offline_mode)
                 r['path'] = str(b)
                 r['cve_matches'] = match_cves(r)
@@ -5778,22 +5761,12 @@ def main():
         print(f"IMPHASH: {pe.get('imphash','?')}")
         print(f"Size:    {h.get('size',0)} bytes")
         return 0
-    if args.imports_only:
-        pe = pe_extended_info(str(drv))
-        if 'error' in pe:
-            print(f"error: {pe['error']}")
-            return 1
-        for imp in pe.get('imports', []):
-            print(f"  {imp['dll']}  ({imp['api_count']} APIs)")
-            for api in imp.get('apis', []):
-                print(f"    {api}")
-        return 0
     if not args.quick:
         _require_ida_or_exit('full scan (default mode)', has_quick_fallback=True)
     if args.quick:
         r = quick_scan(str(drv), offline=args.offline_mode)
     else:
-        r = full_scan(str(drv), args.depth, args.no_flirt, args.deep, args.no_decompile,
+        r = full_scan(str(drv), args.depth, False, args.deep, False,
                       args.verify_load, offline=args.offline_mode)
     r['path'] = str(drv)
     r['cve_matches'] = match_cves(r)
