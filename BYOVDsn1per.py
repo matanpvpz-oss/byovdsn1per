@@ -4073,7 +4073,6 @@ def _print_quickstart() -> int:
 
 
 def _print_examples() -> int:
-    print(C.CYAN + BANNER + C.RESET)
     print(USAGE_EPILOG.strip())
     return 0
 
@@ -4253,44 +4252,123 @@ def _csv_dump(results: list) -> str:
     return out.getvalue()
 
 
-VERSION = 'v2.10.5'
+VERSION = 'v2.10.6'
 
 USAGE_EPILOG = r"""
-examples:
-  First-time setup (always safe):
-    byovdsn1per --doctor                       # check Python + idalib + signing tools
+=========================================================================
+PICK ONE MODE
+=========================================================================
 
-  Recommended one-shot (single driver):
-    byovdsn1per --all driver.sys               # deep scan + CVE match + strings + YARA + signtool
+  Single driver:
+    byovdsn1per DRIVER                full scan (default)
+    byovdsn1per --all DRIVER          deep + poc + strings + yara + verify-load
+    byovdsn1per --quick DRIVER        no-IDA fast lane (PE + HVCI + signing)
+    byovdsn1per --deep DRIVER         full scan + per-IOCTL primitives
 
-  No IDA installed:
-    byovdsn1per --quick driver.sys             # PE+HVCI+signing, no dispatcher walk
+  Many drivers:
+    byovdsn1per --sweep [DIR]         analyze every .sys in DIR (or crawler dir)
+    byovdsn1per --diff A.sys B.sys    side-by-side compare two drivers
 
-  End-to-end pipeline (crawl then sweep):
-    byovdsn1per --crawl                        # populate %APPDATA%\BYOVDsn1per\crawler\
-    byovdsn1per --sweep --all                  # full enrichment on every driver
+  System discovery:
+    byovdsn1per --crawl               33 known driver paths
+    byovdsn1per --deepcrawl           every logical drive (A:..Z:)
 
-  Inspect / replay:
-    byovdsn1per --list                         # what's in the crawler dir
-    byovdsn1per --last-sweep                   # re-display the most recent sweep
-    byovdsn1per --show <FILE.json>             # any prior sweep JSON
+  Inspect one EA:
+    byovdsn1per --decompile DRIVER --ea 0x1400054a0
 
-  Compare two drivers:
+
+=========================================================================
+ADD-ONS BY MODE -- only flags listed under a mode work with that mode
+=========================================================================
+
+  With --sweep [DIR]:
+    --all              run --deep + --poc + --strings + --yara-rule + --verify-load on each
+    --poc              CVE matcher per driver
+    --strings          string extraction per driver
+    --yara-rule        emit YARA per driver
+    --verify-load      signtool /kp /v per driver
+    --burnt-check      drop drivers signed by burnt certificates  *
+    --filter TIER      only show STRONG / PERFECT (TIER = perfect | partial | any)  *
+    --size-cap N       skip drivers > N MB
+    --output FMT       table | json | markdown | csv
+    --json-out FILE    also write sweep JSON to FILE
+    --quiet            one-line verdict per driver
+
+  With --crawl or --deepcrawl:
+    --crawl-path PATH       add a root (repeatable; combines with defaults)
+    --crawl-out DIR         output dir (default: %APPDATA%\BYOVDsn1per\crawler\)
+    --crawl-limit N         stop after N unique drivers
+    --crawl-no-defaults     skip default Windows roots; only walk --crawl-path
+    --crawl-no-checkpoint   disable .scanned_paths.txt + sha256 cache
+    --restart               wipe checkpoint + start fresh  (alone implies --deepcrawl)
+
+  With single-driver (default / --all / --deep / --quick):
+    --poc              CVE matcher (no exploit, just fingerprint)
+    --strings          extract + tag strings (URLs, IPs, registry, PDB, SDDL)
+    --yara-rule        emit YARA rule
+    --yara-out FILE    also write the rule to FILE
+    --verify-load      signtool /kp /v
+    --explain          signal-by-signal score breakdown
+    --offline-mode     no subprocess (skip PowerShell/signtool); PE-only
+
+  With --decompile:
+    --ea ADDR          (required) effective address to decompile
+    --no-flirt         skip FLIRT signature application
+
+  Standalone shortcuts -- ignore DRIVER, exit immediately:
+    --doctor             verify install + paths
+    --examples           print this examples block and exit
+    --list               summarise the crawler dir
+    --last-sweep         re-display most recent sweep JSON
+    --show FILE          re-display any sweep JSON
+    --hvci-only DRIVER   HVCI flag verdict only
+    --sign-verify DRIVER signtool /kp /v only
+    --hashes-only DRIVER MD5/SHA1/SHA256/imphash only
+    --imports-only DRIVER PE imports table only
+    --cve-list           dump the CVE matcher database
+    --list-default-roots show what --crawl walks by default
+
+  * sweep-only -- ignored outside --sweep
+
+
+=========================================================================
+EXAMPLES
+=========================================================================
+
+  Setup:
+    byovdsn1per --doctor
+
+  Single-driver triage:
+    byovdsn1per --all driver.sys
+    byovdsn1per --quick driver.sys
+    byovdsn1per --deep --explain driver.sys
+
+  Sweep + filter:
+    byovdsn1per --sweep                                 # crawler dir
+    byovdsn1per --sweep D:\my_drivers
+    byovdsn1per --sweep --burnt-check                   # drop burnt
+    byovdsn1per --sweep --all --filter perfect          # full enrich, STRONG+ only
+    byovdsn1per --sweep --output json --json-out s.json
+
+  Crawl + chain to sweep:
+    byovdsn1per --crawl                                 # 33 default paths
+    byovdsn1per --crawl --crawl-limit 100
+    byovdsn1per --crawl --crawl-path D:\extracted
+    byovdsn1per --deepcrawl                             # entire PC
+    byovdsn1per --deepcrawl --restart                   # wipe + restart
+    byovdsn1per --crawl && byovdsn1per --sweep --burnt-check
+
+  Compare / replay / decompile:
     byovdsn1per --diff a.sys b.sys
+    byovdsn1per --last-sweep
+    byovdsn1per --show sweep_20260101_120000.json
+    byovdsn1per --decompile driver.sys --ea 0x14000d6e0
 
-  Focused triage:
-    byovdsn1per --hvci-only driver.sys         # HVCI flag verdict
-    byovdsn1per --sign-verify driver.sys       # signtool /kp /v
-    byovdsn1per --hashes-only driver.sys       # MD5/SHA1/SHA256/imphash
-    byovdsn1per --cve-list                     # print all 30 CVEs in the database
+  CVE-only modes:
+    byovdsn1per --cve-list
+    byovdsn1per --poc driver.sys
 
-  System-wide discovery:
-    byovdsn1per --crawl                        # 33 known driver paths
-    byovdsn1per --deepcrawl                    # every logical drive (A:..Z:)
-    byovdsn1per --restart                      # wipe checkpoint + deepcrawl
-
-  Verbose flag list:                           byovdsn1per --help
-  Worked examples:                             byovdsn1per --examples
+  Verbose flag reference:  byovdsn1per --help
 """
 
 def main():
@@ -4360,34 +4438,39 @@ def main():
     shortcut.add_argument('--hashes-only', action='store_true', help='print MD5/SHA1/SHA256/imphash and exit')
     shortcut.add_argument('--imports-only', action='store_true', help='dump PE imports table and exit')
     shortcut.add_argument('--cve-list', action='store_true', help='list all CVEs in the matcher database and exit')
-    shortcut.add_argument('--explain', action='store_true',
-                          help='after the main verdict, show a signal-by-signal score breakdown')
 
-    addon = p.add_argument_group('Per-driver add-ons (combine with main scan)')
+    addon = p.add_argument_group(
+        'Add-ons (work with single-driver AND --sweep; --burnt-check is sweep-only)')
     addon.add_argument('--poc', action='store_true',
-                       help='SAFE CVE matcher: which known CVEs target this driver (no exploitation)')
+                       help='[single|sweep] CVE matcher (no exploit)')
     addon.add_argument('--strings', action='store_true',
-                       help='extract ASCII + UTF-16LE strings with regex tagging (URLs/IPs/registry/PDB/SDDL)')
+                       help='[single|sweep] extract ASCII+UTF-16 strings with regex tagging')
     addon.add_argument('--yara-rule', action='store_true',
-                       help='emit YARA detection rule (uses hash + pe modules)')
+                       help='[single|sweep] emit YARA detection rule')
     addon.add_argument('--yara-out', metavar='FILE',
-                       help='also write the YARA rule to FILE')
+                       help='[single|sweep] also write the YARA rule to FILE')
     addon.add_argument('--max-strings', type=int, default=200,
-                       help='cap top_ascii/top_utf16 size in --strings output (default 200)')
+                       help='[single|sweep] cap top_ascii/top_utf16 size (default 200)')
     addon.add_argument('--burnt-check', action='store_true',
-                       help='in --sweep, skip drivers signed by burnt certificates')
-    addon.add_argument('--verify-load', action='store_true', help='run signtool /kp /v during full scan')
+                       help='[sweep-only] drop drivers signed by burnt certificates')
+    addon.add_argument('--verify-load', action='store_true',
+                       help='[single|sweep] run signtool /kp /v')
+    addon.add_argument('--explain', action='store_true',
+                       help='[single] signal-by-signal score breakdown')
+    addon.add_argument('--offline-mode', '--offline', action='store_true',
+                       help='[single|sweep] no subprocess (skip PowerShell/signtool); PE-only')
 
-    tuning = p.add_argument_group('Scan tuning')
-    tuning.add_argument('--depth', type=int, default=3, help='BFS depth for callee walks (default 3)')
+    tuning = p.add_argument_group('Tuning (single-driver or --sweep)')
+    tuning.add_argument('--depth', type=int, default=3,
+                        help='[single|sweep] BFS depth for callee walks (default 3)')
     tuning.add_argument('--size-cap', type=float, default=1.5,
-                        help='skip drivers > N MB (default 1.5)')
+                        help='[single|sweep] skip drivers > N MB (default 1.5)')
     tuning.add_argument('--filter', choices=['perfect', 'partial', 'any'], default='any',
-                        help='in --sweep, only show drivers >= tier')
-    tuning.add_argument('--no-flirt', action='store_true', help='skip FLIRT signature application')
-    tuning.add_argument('--no-decompile', action='store_true', help='skip Hexrays decompile in deep mode')
-    tuning.add_argument('--offline-mode', '--offline', action='store_true',
-                        help='no subprocess calls (skip PowerShell/signtool); PE-only')
+                        help='[sweep-only] only show drivers >= tier')
+    tuning.add_argument('--no-flirt', action='store_true',
+                        help='[single|sweep|decompile] skip FLIRT sigs')
+    tuning.add_argument('--no-decompile', action='store_true',
+                        help='[single|sweep] skip Hexrays decompile in --deep mode')
 
     output = p.add_argument_group('Output')
     output.add_argument('--output', choices=['table', 'json', 'markdown', 'csv'], default='table',
