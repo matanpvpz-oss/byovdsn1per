@@ -3025,7 +3025,9 @@ def _looks_like_ioctl(val: int) -> bool:
                                                                        
     if 0xC0000000 <= val <= 0xC07FFFFF:
         return False
-                                                                         
+    if 0x80000000 <= val <= 0x800001FF:
+        return False
+
     if (val & 0xFF000000) == 0xFF000000 and (val & 0xFFF) == 0:
         return False
     return True
@@ -3416,7 +3418,8 @@ def _detect_gates(handler_ea, max_depth=3):
                 if nm in ('RtlCompareUnicodeString', 'RtlEqualUnicodeString'):
                     rtl_cmp_calls += 1
                 if nm in ('ZwQueryInformationToken', 'SeQueryAuthenticationIdToken',
-                          'SePrivilegeCheck', 'SeAccessCheck'):
+                          'SePrivilegeCheck', 'SeAccessCheck',
+                          'SeSinglePrivilegeCheck'):
                     gates.add('TOKEN_CHECK')
                 if d < max_depth and callee and ida_funcs.get_func(callee) and callee not in visited:
                     queue.append((callee, d + 1))
@@ -4246,7 +4249,7 @@ def _csv_dump(results: list) -> str:
     return out.getvalue()
 
 
-VERSION = 'v2.10.3'
+VERSION = 'v2.10.4'
 
 USAGE_EPILOG = r"""
 examples:
