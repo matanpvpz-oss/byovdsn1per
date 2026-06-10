@@ -638,6 +638,28 @@ def match_cves(result: dict, min_confidence: str = 'LOW') -> list:
     return sorted(matched, key=lambda m: tier_rank.get(m.get('confidence', 'LOW'), 1),
                   reverse=True)
 
+def _terminal_supports_color() -> bool:
+    if os.environ.get('NO_COLOR'):
+        return False
+    if not sys.stdout.isatty():
+        return False
+    if sys.platform != 'win32':
+        return True
+    try:
+        import ctypes
+        kernel32 = ctypes.windll.kernel32
+        h = kernel32.GetStdHandle(-11)
+        mode = ctypes.c_ulong()
+        if not kernel32.GetConsoleMode(h, ctypes.byref(mode)):
+            return False
+        ENABLE_VIRTUAL_TERMINAL_PROCESSING = 0x0004
+        if mode.value & ENABLE_VIRTUAL_TERMINAL_PROCESSING:
+            return True
+        return bool(kernel32.SetConsoleMode(
+            h, mode.value | ENABLE_VIRTUAL_TERMINAL_PROCESSING))
+    except Exception:
+        return False
+
 class C:
     RED = "\033[31m"
     GREEN = "\033[32m"
@@ -4372,7 +4394,7 @@ def main():
     output.add_argument('--no-banner', action='store_true', help='suppress banner art')
 
     if len(sys.argv) == 1:
-        if os.environ.get('NO_COLOR') or not sys.stdout.isatty():
+        if not _terminal_supports_color():
             C.disable()
         return _print_quickstart()
 
@@ -4385,7 +4407,7 @@ def main():
         args.yara_rule = True
         args.verify_load = True
 
-    if args.no_color or os.environ.get('NO_COLOR') or not sys.stdout.isatty():
+    if args.no_color or not _terminal_supports_color():
         C.disable()
                                                                              
     try:
