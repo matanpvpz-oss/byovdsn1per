@@ -1,0 +1,322 @@
+{
+  "driver": "C:\\Users\\kj\\AppData\\Local\\Temp\\knownvuln\\ene.sys",
+  "modes_resolved": [
+    "mj14_recursive"
+  ],
+  "mj14_handler": "0x140001af0",
+  "mj_table_writes": {
+    "14": "0x140001af0",
+    "2": "0x140001af0",
+    "0": "0x140001af0"
+  },
+  "ioctls": [
+    "0x80102040",
+    "0x80102044",
+    "0x80102050",
+    "0x80102054"
+  ],
+  "ioctl_count": 4,
+  "minifilter": null,
+  "wdf": null,
+  "imports": [
+    "BCryptCloseAlgorithmProvider",
+    "BCryptDecrypt",
+    "BCryptDestroyKey",
+    "BCryptGetProperty",
+    "BCryptImportKey",
+    "BCryptOpenAlgorithmProvider",
+    "BCryptSetProperty",
+    "C_specific_handler",
+    "ExAllocatePoolWithTag",
+    "ExFreePoolWithTag",
+    "HalTranslateBusAddress",
+    "IoCreateDevice",
+    "IoCreateSymbolicLink",
+    "IoDeleteDevice",
+    "IoDeleteSymbolicLink",
+    "IofCompleteRequest",
+    "KeBugCheckEx",
+    "ObReferenceObjectByHandle",
+    "ObfDereferenceObject",
+    "PsGetCurrentProcessId",
+    "PsRemoveLoadImageNotifyRoutine",
+    "PsSetLoadImageNotifyRoutine",
+    "RtlInitUnicodeString",
+    "RtlTimeToSecondsSince1970",
+    "ZwClose",
+    "ZwMapViewOfSection",
+    "ZwOpenSection",
+    "ZwUnmapViewOfSection",
+    "wcsstr"
+  ],
+  "primitives": [
+    "BUS_ADDR_TRANSLATE",
+    "CALLBACK_REG",
+    "HANDLE_DUP",
+    "PHYS_MEM_MAP"
+  ],
+  "archetype_strings": null,
+  "process_callback_targets": null,
+  "driver_entry": "0x140006000",
+  "function_count": 46,
+  "pdb_path": "E:\\GitSourceCode\\IoAccess\\SmbusSDK\\driver_src\\EneIo\\x64\\Release\\EneIo.pdb",
+  "device_name": null,
+  "has_io_create_device": true,
+  "has_io_create_device_secure": false,
+  "sddl_strings": [],
+  "gate_status": "PID_CHECK",
+  "gates_detected": [
+    "PID_CHECK"
+  ],
+  "per_ioctl_classification": [
+    {
+      "ioctl": "0x80102040",
+      "handler_branch": "0x140001b60",
+      "primitives": [
+        "BUS_ADDR_TRANSLATE",
+        "HANDLE_DUP",
+        "PHYS_MEM_MAP"
+      ]
+    },
+    {
+      "ioctl": "0x80102044",
+      "handler_branch": "0x140001b56",
+      "primitives": [
+        "BUS_ADDR_TRANSLATE",
+        "HANDLE_DUP",
+        "PHYS_MEM_MAP"
+      ]
+    },
+    {
+      "ioctl": "0x80102050",
+      "handler_branch": "0x140001b4c",
+      "primitives": [
+        "BUS_ADDR_TRANSLATE",
+        "HANDLE_DUP",
+        "PHYS_MEM_MAP"
+      ]
+    },
+    {
+      "ioctl": "0x80102054",
+      "handler_branch": "0x140001b3f",
+      "primitives": [
+        "BUS_ADDR_TRANSLATE",
+        "HANDLE_DUP",
+        "PHYS_MEM_MAP"
+      ]
+    }
+  ],
+  "analyze_time_s": 3.65,
+  "flirt_applied": 0,
+  "hvci": {
+    "dll_characteristics": "0x4160",
+    "force_integrity": false,
+    "guard_cf": true,
+    "init_wx": false,
+    "section_count": 6,
+    "is_64bit": true
+  },
+  "hashes": {
+    "md5": "7e6e2ed880c7ab115fca68136051f9ce",
+    "sha1": "3cd037fbba8aae82c1b111c9f8755349c98bcb3c",
+    "sha256": "175eed7a4c6de9c3156c7ae16ae85c554959ec350f1c8aaa6dfe8c7e99de3347",
+    "size": 20992
+  },
+  "pe_extended": {
+    "machine": "0x8664",
+    "machine_name": "AMD64",
+    "compile_timestamp": 1588918039,
+    "compile_date_utc": "2020-05-08T06:07:19+00:00",
+    "characteristics": "0x22",
+    "linker_version": "14.16",
+    "subsystem": 1,
+    "subsystem_name": "NATIVE",
+    "image_base": "0x140000000",
+    "addr_of_entry": "0x6000",
+    "base_of_code": "0x1000",
+    "size_of_code": 7168,
+    "size_of_init": 3584,
+    "size_of_uninit": 0,
+    "has_tls": false,
+    "sections": [
+      {
+        "name": ".text",
+        "va": "0x1000",
+        "vsize": 5298,
+        "raw_off": "0x400",
+        "raw_size": 5632,
+        "char": "0x68000020",
+        "flags": "CODE|EXEC|READ"
+      },
+      {
+        "name": ".rdata",
+        "va": "0x3000",
+        "vsize": 1988,
+        "raw_off": "0x1a00",
+        "raw_size": 2048,
+        "char": "0x48000040",
+        "flags": "IDATA|READ"
+      },
+      {
+        "name": ".data",
+        "va": "0x4000",
+        "vsize": 32,
+        "raw_off": "0x2200",
+        "raw_size": 512,
+        "char": "0xc8000040",
+        "flags": "IDATA|READ|WRITE"
+      },
+      {
+        "name": ".pdata",
+        "va": "0x5000",
+        "vsize": 384,
+        "raw_off": "0x2400",
+        "raw_size": 512,
+        "char": "0x48000040",
+        "flags": "IDATA|READ"
+      },
+      {
+        "name": "INIT",
+        "va": "0x6000",
+        "vsize": 1156,
+        "raw_off": "0x2600",
+        "raw_size": 1536,
+        "char": "0x62000020",
+        "flags": "CODE|EXEC|READ"
+      },
+      {
+        "name": ".reloc",
+        "va": "0x7000",
+        "vsize": 20,
+        "raw_off": "0x2c00",
+        "raw_size": 512,
+        "char": "0x42000040",
+        "flags": "IDATA|READ"
+      }
+    ],
+    "imports": [
+      {
+        "dll": "cng.sys",
+        "api_count": 7,
+        "apis": [
+          "BCryptCloseAlgorithmProvider",
+          "BCryptGetProperty",
+          "BCryptDecrypt",
+          "BCryptImportKey",
+          "BCryptDestroyKey",
+          "BCryptSetProperty",
+          "BCryptOpenAlgorithmProvider"
+        ]
+      },
+      {
+        "dll": "ntoskrnl.exe",
+        "api_count": 21,
+        "apis": [
+          "IofCompleteRequest",
+          "IoCreateDevice",
+          "IoCreateSymbolicLink",
+          "IoDeleteDevice",
+          "IoDeleteSymbolicLink",
+          "wcsstr",
+          "ObfDereferenceObject",
+          "ZwClose",
+          "ZwOpenSection",
+          "ZwMapViewOfSection",
+          "ZwUnmapViewOfSection",
+          "PsSetLoadImageNotifyRoutine",
+          "PsRemoveLoadImageNotifyRoutine",
+          "PsGetCurrentProcessId",
+          "RtlTimeToSecondsSince1970",
+          "__C_specific_handler",
+          "ExAllocatePoolWithTag",
+          "ExFreePoolWithTag",
+          "RtlInitUnicodeString",
+          "KeBugCheckEx",
+          "ObReferenceObjectByHandle"
+        ]
+      },
+      {
+        "dll": "hal.dll",
+        "api_count": 1,
+        "apis": [
+          "HalTranslateBusAddress"
+        ]
+      }
+    ],
+    "import_dll_count": 3,
+    "import_api_count": 29,
+    "imphash": "baa420e9d4e3baf0d65d4fc2bf497708",
+    "rich_header_present": true,
+    "rich_dans_xor_key": "afe0575c",
+    "rich_header_records": [
+      {
+        "comp_id": 17065573,
+        "count": 5,
+        "prod_id": 260,
+        "min_ver": 26213,
+        "tool": "VS2019 c",
+        "family": "VS2019"
+      },
+      {
+        "comp_id": 17000037,
+        "count": 4,
+        "prod_id": 259,
+        "min_ver": 26213,
+        "tool": "VS2019 c++",
+        "family": "VS2019"
+      },
+      {
+        "comp_id": 16868965,
+        "count": 7,
+        "prod_id": 257,
+        "min_ver": 26213,
+        "tool": "VS2017 link",
+        "family": "VS2017"
+      },
+      {
+        "comp_id": 65536,
+        "count": 30,
+        "prod_id": 1,
+        "min_ver": 0,
+        "tool": "Old MSC import lib",
+        "family": null
+      },
+      {
+        "comp_id": 17066399,
+        "count": 5,
+        "prod_id": 260,
+        "min_ver": 27039,
+        "tool": "VS2019 c",
+        "family": "VS2019"
+      },
+      {
+        "comp_id": 16935327,
+        "count": 1,
+        "prod_id": 258,
+        "min_ver": 27039,
+        "tool": "VS2017 cvtres",
+        "family": "VS2017"
+      }
+    ],
+    "rich_compiler_family": "VS2017",
+    "version_info": {},
+    "debug_pdb_path": "E:\\GitSourceCode\\IoAccess\\SmbusSDK\\driver_src\\EneIo\\x64\\Release\\EneIo.pdb",
+    "debug_pdb_guid": "33fa26dffdaf4eb3b53acabd07cea4ac",
+    "debug_pdb_age": 1,
+    "tls_callback_count": 0,
+    "tls_callback_addresses": [],
+    "export_names": []
+  },
+  "signing": {
+    "SUBJECT": "CN=Microsoft Windows Hardware Compatibility Publisher, O=Microsoft Corporation, L=Redmond, S=Washington, C=US",
+    "THUMB": "F044317A728A9E33A8F6C8BA203EA8E4B11723E5",
+    "ISSUER": "CN=Microsoft Windows Third Party Component CA 2014, O=Microsoft Corporation, L=Redmond, S=Washington, C=US",
+    "NOTBEFORE": "2020-03-11T10:31:14.0000000-07:00",
+    "NOTAFTER": "2021-03-05T09:31:14.0000000-08:00",
+    "STATUS": "Valid",
+    "burnt_status": "clean"
+  },
+  "path": "C:\\Users\\kj\\AppData\\Local\\Temp\\knownvuln\\ene.sys",
+  "_score": 25,
+  "_tier": "SKIP"
+}

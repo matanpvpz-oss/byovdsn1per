@@ -1,0 +1,282 @@
+{
+  "driver": "C:\\Users\\kj\\AppData\\Local\\Temp\\knownvuln\\semav6msr64.sys",
+  "modes_resolved": [
+    "legacy_mj14"
+  ],
+  "mj14_handler": "0x15150",
+  "mj_table_writes": {
+    "0": "0x15010",
+    "2": "0x15010",
+    "16": "0x15100",
+    "14": "0x15150"
+  },
+  "ioctls": [
+    "0x42808",
+    "0x222400",
+    "0x222404",
+    "0x222408",
+    "0x22240c"
+  ],
+  "ioctl_count": 5,
+  "minifilter": null,
+  "wdf": null,
+  "imports": [
+    "C_specific_handler",
+    "DbgPrint",
+    "IoCreateDevice",
+    "IoCreateSymbolicLink",
+    "IoDeleteDevice",
+    "IoDeleteSymbolicLink",
+    "IofCompleteRequest",
+    "KeBugCheckEx",
+    "KeQueryActiveProcessorCount",
+    "KeQueryActiveProcessors",
+    "KeRevertToUserAffinityThreadEx",
+    "KeSetSystemAffinityThreadEx",
+    "MmMapIoSpace",
+    "MmUnmapIoSpace",
+    "RtlAssert",
+    "RtlInitUnicodeString"
+  ],
+  "primitives": [
+    "PHYS_MEM_MAP"
+  ],
+  "archetype_strings": null,
+  "process_callback_targets": null,
+  "driver_entry": "0x16010",
+  "function_count": 19,
+  "pdb_path": "c:\\development\\objchk_win7_amd64\\amd64\\semav6msr64.pdb",
+  "device_name": null,
+  "has_io_create_device": true,
+  "has_io_create_device_secure": false,
+  "sddl_strings": [],
+  "gate_status": "MAGIC_COOKIE",
+  "gates_detected": [
+    "MAGIC_COOKIE"
+  ],
+  "per_ioctl_classification": [
+    {
+      "ioctl": "0x222400",
+      "handler_branch": "0x152a9",
+      "primitives": [
+        "PHYS_MEM_MAP"
+      ]
+    },
+    {
+      "ioctl": "0x222404",
+      "handler_branch": "0x153ce",
+      "primitives": [
+        "PHYS_MEM_MAP"
+      ]
+    },
+    {
+      "ioctl": "0x222408",
+      "handler_branch": "0x154f3",
+      "primitives": [
+        "PHYS_MEM_MAP"
+      ]
+    },
+    {
+      "ioctl": "0x22240c",
+      "handler_branch": "0x15265",
+      "primitives": [
+        "PHYS_MEM_MAP"
+      ]
+    },
+    {
+      "ioctl": "0x42808",
+      "handler_branch": "0x1528a",
+      "primitives": [
+        "PHYS_MEM_MAP"
+      ]
+    }
+  ],
+  "analyze_time_s": 1.78,
+  "flirt_applied": 0,
+  "hvci": {
+    "dll_characteristics": "0x0",
+    "force_integrity": false,
+    "guard_cf": false,
+    "init_wx": true,
+    "section_count": 6,
+    "is_64bit": true
+  },
+  "hashes": {
+    "md5": "07f83829e7429e60298440cd1e601a6a",
+    "sha1": "643383938d5e0d4fd30d302af3e9293a4798e392",
+    "sha256": "9f1229cd8dd9092c27a01f5d56e3c0d59c2bb9f0139abf042e56f343637fda33",
+    "size": 21984
+  },
+  "pe_extended": {
+    "machine": "0x8664",
+    "machine_name": "AMD64",
+    "compile_timestamp": 1390591360,
+    "compile_date_utc": "2014-01-24T19:22:40+00:00",
+    "characteristics": "0x22",
+    "linker_version": "9.0",
+    "subsystem": 1,
+    "subsystem_name": "NATIVE",
+    "image_base": "0x10000",
+    "addr_of_entry": "0x61bc",
+    "base_of_code": "0x1000",
+    "size_of_code": 8192,
+    "size_of_init": 1536,
+    "size_of_uninit": 0,
+    "has_tls": false,
+    "sections": [
+      {
+        "name": ".text",
+        "va": "0x1000",
+        "vsize": 3693,
+        "raw_off": "0x400",
+        "raw_size": 4096,
+        "char": "0x68000020",
+        "flags": "CODE|EXEC|READ"
+      },
+      {
+        "name": ".rdata",
+        "va": "0x2000",
+        "vsize": 492,
+        "raw_off": "0x1400",
+        "raw_size": 512,
+        "char": "0x48000040",
+        "flags": "IDATA|READ"
+      },
+      {
+        "name": ".data",
+        "va": "0x3000",
+        "vsize": 280,
+        "raw_off": "0x1600",
+        "raw_size": 512,
+        "char": "0xc8000040",
+        "flags": "IDATA|READ|WRITE"
+      },
+      {
+        "name": ".pdata",
+        "va": "0x4000",
+        "vsize": 240,
+        "raw_off": "0x1800",
+        "raw_size": 512,
+        "char": "0x48000040",
+        "flags": "IDATA|READ"
+      },
+      {
+        "name": "PAGE",
+        "va": "0x5000",
+        "vsize": 2093,
+        "raw_off": "0x1a00",
+        "raw_size": 2560,
+        "char": "0x60000020",
+        "flags": "CODE|EXEC|READ"
+      },
+      {
+        "name": "INIT",
+        "va": "0x6000",
+        "vsize": 1114,
+        "raw_off": "0x2400",
+        "raw_size": 1536,
+        "char": "0xe2000020",
+        "flags": "CODE|EXEC|READ|WRITE"
+      }
+    ],
+    "imports": [
+      {
+        "dll": "ntoskrnl.exe",
+        "api_count": 16,
+        "apis": [
+          "KeQueryActiveProcessors",
+          "KeQueryActiveProcessorCount",
+          "IoDeleteSymbolicLink",
+          "KeSetSystemAffinityThreadEx",
+          "RtlInitUnicodeString",
+          "IoDeleteDevice",
+          "MmUnmapIoSpace",
+          "MmMapIoSpace",
+          "IofCompleteRequest",
+          "KeRevertToUserAffinityThreadEx",
+          "IoCreateSymbolicLink",
+          "IoCreateDevice",
+          "RtlAssert",
+          "DbgPrint",
+          "KeBugCheckEx",
+          "__C_specific_handler"
+        ]
+      }
+    ],
+    "import_dll_count": 1,
+    "import_api_count": 16,
+    "imphash": "24e4c876bb5db0b0e0a4e92f0a3d3a48",
+    "rich_header_present": true,
+    "rich_dans_xor_key": "fa749295",
+    "rich_header_records": [
+      {
+        "comp_id": 65536,
+        "count": 16,
+        "prod_id": 1,
+        "min_ver": 0,
+        "tool": "Old MSC import lib",
+        "family": null
+      },
+      {
+        "comp_id": 9664521,
+        "count": 3,
+        "prod_id": 147,
+        "min_ver": 30729,
+        "tool": "prod_0x0093",
+        "family": "VS2022"
+      },
+      {
+        "comp_id": 8615945,
+        "count": 3,
+        "prod_id": 131,
+        "min_ver": 30729,
+        "tool": "VS2005 c++",
+        "family": "VS2005"
+      },
+      {
+        "comp_id": 9795593,
+        "count": 2,
+        "prod_id": 149,
+        "min_ver": 30729,
+        "tool": "prod_0x0095",
+        "family": "VS2022"
+      },
+      {
+        "comp_id": 9009161,
+        "count": 1,
+        "prod_id": 137,
+        "min_ver": 30729,
+        "tool": "prod_0x0089",
+        "family": "VS2022"
+      },
+      {
+        "comp_id": 9533449,
+        "count": 1,
+        "prod_id": 145,
+        "min_ver": 30729,
+        "tool": "prod_0x0091",
+        "family": "VS2022"
+      }
+    ],
+    "rich_compiler_family": "VS2008",
+    "version_info": {},
+    "debug_pdb_path": "c:\\development\\objchk_win7_amd64\\amd64\\semav6msr64.pdb",
+    "debug_pdb_guid": "67f67a26a18143ea85fdb32de5d69436",
+    "debug_pdb_age": 1,
+    "tls_callback_count": 0,
+    "tls_callback_addresses": [],
+    "export_names": []
+  },
+  "signing": {
+    "SUBJECT": "CN=Intel(R) Code Signing External, O=Intel Corporation, L=Santa Clara, S=CA, C=US",
+    "THUMB": "0ADDE92EAD607F6F00FBCAFC710FA218E9909DB5",
+    "ISSUER": "CN=Intel External Basic Issuing CA 3B, O=Intel Corporation, L=Santa Clara, S=CA, C=US",
+    "NOTBEFORE": "2015-04-16T10:22:30.0000000-07:00",
+    "NOTAFTER": "2016-04-15T10:22:30.0000000-07:00",
+    "STATUS": "Valid",
+    "burnt_status": "clean"
+  },
+  "path": "C:\\Users\\kj\\AppData\\Local\\Temp\\knownvuln\\semav6msr64.sys",
+  "_score": 15,
+  "_tier": "SKIP"
+}

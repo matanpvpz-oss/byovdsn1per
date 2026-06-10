@@ -3490,7 +3490,7 @@ def perfect_score(result: dict) -> tuple:
     sig_subject = ((result.get('signing') or {}).get('SUBJECT') or '').upper()
     ms_inbox_signed = ('CN=MICROSOFT WINDOWS,' in sig_subject
                        or sig_subject.startswith('CN=MICROSOFT WINDOWS,'))
-    if ms_inbox_signed and ic == 0:
+    if ms_inbox_signed and ic <= 1:
         score -= 25
 
     dispatcher_modes = {'legacy_mj14', 'mj14_recursive', 'wdf_static',
@@ -4116,7 +4116,7 @@ def _csv_dump(results: list) -> str:
     return out.getvalue()
 
 
-VERSION = 'v2.9.5'
+VERSION = 'v2.9.6'
 
 USAGE_EPILOG = r"""
 examples:
