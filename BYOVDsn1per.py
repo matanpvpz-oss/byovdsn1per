@@ -616,6 +616,27 @@ CVE_DATABASE = [
         ],
         'notes': 'Italian TG Soft VirIT Agent System AV driver. Production cert (Thawte chain) revoked / burnt. ZwTerminateProcess primitive exposed via 42 IOCTLs in device_type 0x8273 (custom OEM range). MAGIC_COOKIE gate exists but is a constant 32-bit value extractable by static analysis (not exploitability barrier). HVCI-blocked but loads on ~70% consumer installs.',
     },
+    {
+        'cve': 'LENOVO-LRTP-BOOTREPAIR',
+        'name': 'Lenovo BootRepair (lrtp) -- arbitrary process kill + registry write',
+        'year': 2018,
+        'sha256_exact': {
+            '5ab36c116767eaae53a466fbc2dae7cfd608ed77721f65e83312037fbd57c946',
+        },
+        'signer_match': 'LENOVO',
+        'distinctive_signer': True,
+        'signer_required': True,
+        'dispatcher_signature': {
+            'device_types': {0x0022},
+            'ioctl_codes': {0x222014},
+            'min_overlap': 1,
+        },
+        'primitives_gained': ['PROCESS_KILL', 'TOKEN_STEAL', 'REGISTRY_WRITE'],
+        'pocs_known': [
+            'https://www.loldrivers.io/drivers/82699276-b0f5-9a23-0412-0a6baaf64a6b',
+        ],
+        'notes': 'Lenovo PC Manager Recovery Tool Provider driver. PsLookupProcessByProcessId + ZwTerminateProcess exposed via IOCTL 0x222014, no PID/cookie/SID gate. Production Lenovo cert valid 2015-2018, timestamped before expiry so still loads. ZwSetValueKey + ZwCreateKey also exposed -- can rewrite HKLM\\System\\CurrentControlSet keys from SYSTEM context (EDR-disable enabler).',
+    },
 ]
 
 def _compute_polluted_device_types(db, threshold=3):
@@ -805,6 +826,11 @@ PRIMITIVE_CLASSES = {
     "MSR_ACCESS":       {"__readmsr", "__writemsr", "_readmsr", "_writemsr"},
     "MINIFILTER":       {"FltRegisterFilter", "FltStartFiltering", "FltCreateCommunicationPort"},
     "WDF":              {"WdfDriverCreate", "WdfDeviceCreate", "WdfIoQueueCreate"},
+    "REGISTRY_WRITE":   {"ZwSetValueKey", "ZwCreateKey", "ZwDeleteKey",
+                         "ZwDeleteValueKey", "ZwSetInformationKey"},
+    "FILE_WRITE":       {"ZwCreateFile", "ZwWriteFile", "ZwDeleteFile",
+                         "ZwSetInformationFile"},
+    "BUGCHECK":         {"KeBugCheck", "KeBugCheckEx"},
 }
 
 def hvci_flags_from_buf(buf: bytes) -> dict:
@@ -3647,9 +3673,11 @@ def severity_score(result: dict) -> tuple:
     else:
         sev += 15
 
-    tier_1 = {'KERNEL_EXEC', 'PHYS_MEM_MAP', 'MSR_WRITE'}
-    tier_2 = {'PCI_CONFIG_RW', 'PORT_IO', 'PROCESS_KILL'}
-    tier_3 = {'TOKEN_STEAL', 'HANDLE_DUP', 'MDL_PRIMITIVE', 'KERNEL_SYMBOL_RES'}
+    tier_1 = {'KERNEL_EXEC', 'PHYS_MEM_MAP', 'MSR_WRITE', 'MSR_ACCESS'}
+    tier_2 = {'PCI_CONFIG_RW', 'PORT_IO', 'PROCESS_KILL', 'REGISTRY_WRITE',
+              'FILE_WRITE', 'DSE_DISABLE'}
+    tier_3 = {'TOKEN_STEAL', 'HANDLE_DUP', 'MDL_PRIMITIVE', 'KERNEL_SYMBOL_RES',
+              'BUGCHECK', 'PROCESS_ATTACH', 'CALLBACK_REG'}
     sev += min(15, 5 * len(prims & tier_1))
     sev += min(10, 3 * len(prims & tier_2))
     sev += min(8, 2 * len(prims & tier_3))
@@ -3746,7 +3774,8 @@ def perfect_score(result: dict) -> tuple:
     if has_dispatcher and ic == 0 and len(prims) >= 3 and score < 30 and not ms_inbox_signed:
         score = 30
 
-    byovd_primitives = {'PHYS_MEM_MAP', 'PCI_CONFIG_RW', 'MSR_WRITE', 'PORT_IO'}
+    byovd_primitives = {'PHYS_MEM_MAP', 'PCI_CONFIG_RW', 'MSR_WRITE', 'MSR_ACCESS',
+                        'PORT_IO', 'PROCESS_KILL', 'REGISTRY_WRITE', 'KERNEL_EXEC'}
     if (has_dispatcher and ic >= 1 and (set(prims) & byovd_primitives)
             and not ms_inbox_signed and score < 30):
         score = 30
@@ -4547,7 +4576,7 @@ def _csv_dump(results: list) -> str:
     return out.getvalue()
 
 
-VERSION = 'v2.10.12'
+VERSION = 'v2.10.13'
 
 USAGE_EPILOG = r"""
 =========================================================================
@@ -4954,6 +4983,8 @@ def main():
             r['cve_matches'] = match_cves(r)
             sc, tr = perfect_score(r)
             r['_score'], r['_tier'] = sc, tr
+            sev, sev_label = severity_score(r)
+            r['_severity'], r['_severity_label'] = sev, sev_label
             scans.append(r)
         print()
         print(diff_drivers(scans[0], scans[1]))
@@ -5071,6 +5102,9 @@ def main():
                 sc, tr = perfect_score(r)
                 r['_score'] = sc
                 r['_tier'] = tr
+                sev, sev_label = severity_score(r)
+                r['_severity'] = sev
+                r['_severity_label'] = sev_label
                 if args.strings:
                     s = extract_strings(str(b))
                     if 'top_ascii' in s:
@@ -5201,6 +5235,9 @@ def main():
     sc, tr = perfect_score(r)
     r['_score'] = sc
     r['_tier'] = tr
+    sev, sev_label = severity_score(r)
+    r['_severity'] = sev
+    r['_severity_label'] = sev_label
                                                                           
     if args.strings:
         s = extract_strings(str(drv))
