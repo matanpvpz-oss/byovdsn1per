@@ -4083,6 +4083,43 @@ def _sha256_file(path: str) -> str:
     except OSError:
         return ''
 
+def _update() -> int:
+    import shutil as _sh
+    source_path = os.path.abspath(__file__)
+    install_dir = os.path.join(os.environ.get('LOCALAPPDATA', ''),
+                               'Programs', 'BYOVDsn1per')
+    installed_path = os.path.join(install_dir, 'BYOVDsn1per.py')
+    source_hash = _sha256_file(source_path)
+    installed_hash = _sha256_file(installed_path)
+    print(f"{C.BOLD}BYOVDsn1per --update{C.RESET}")
+    print(f"  source:    {source_path}  ({VERSION}, sha256={source_hash[:16]}...)")
+    if source_path == installed_path:
+        print(f"  {C.YELLOW}source IS the installed binary -- nothing to do{C.RESET}")
+        return 0
+    if installed_hash == source_hash:
+        print(f"  installed: {installed_path}")
+        print(f"  {C.GREEN}+ already up to date ({VERSION}){C.RESET}")
+        return 0
+    try:
+        os.makedirs(install_dir, exist_ok=True)
+        _sh.copy2(source_path, installed_path)
+        cmd_src = os.path.join(os.path.dirname(source_path), 'BYOVDsn1per.cmd')
+        if os.path.isfile(cmd_src):
+            _sh.copy2(cmd_src, os.path.join(install_dir, 'BYOVDsn1per.cmd'))
+            _sh.copy2(cmd_src, os.path.join(install_dir, 'byovdsn1per.cmd'))
+        new_hash = _sha256_file(installed_path)
+        if installed_hash:
+            print(f"  installed: {installed_path}")
+            print(f"  {C.DIM}was: sha256={installed_hash[:16]}...{C.RESET}")
+        else:
+            print(f"  installed: {installed_path}  (was missing)")
+        print(f"  {C.GREEN}+ updated to {VERSION}  (sha256={new_hash[:16]}...){C.RESET}")
+        return 0
+    except OSError as e:
+        print(f"  {C.RED}- update failed: {e}{C.RESET}")
+        print(f"  {C.DIM}hint: if permission denied, re-run install.ps1 from the repo dir{C.RESET}")
+        return 1
+
 def _doctor(fix: bool = False) -> int:
     import hashlib, shutil as _sh
     issues = []
@@ -4510,7 +4547,7 @@ def _csv_dump(results: list) -> str:
     return out.getvalue()
 
 
-VERSION = 'v2.10.11'
+VERSION = 'v2.10.12'
 
 USAGE_EPILOG = r"""
 =========================================================================
@@ -4685,6 +4722,8 @@ def main():
                           help='verify install: Python version, idalib, signtool/PowerShell, paths, crawler dir')
     shortcut.add_argument('--fix', action='store_true',
                           help='[with --doctor] auto-repair: redeploy stale installed binary, create missing dirs, clear stale caches')
+    shortcut.add_argument('--update', action='store_true',
+                          help='self-update: hash-verify and redeploy this source to %%LOCALAPPDATA%%\\Programs\\BYOVDsn1per\\ (no diagnose)')
     shortcut.add_argument('--examples', action='store_true',
                           help='print the worked examples block and exit (same as the --help epilog)')
     shortcut.add_argument('--list', action='store_true',
@@ -4782,6 +4821,8 @@ def main():
         return 0
     if args.doctor:
         return _doctor(fix=getattr(args, 'fix', False))
+    if args.update:
+        return _update()
     if args.examples:
         return _print_examples()
     if getattr(args, 'list', False):
