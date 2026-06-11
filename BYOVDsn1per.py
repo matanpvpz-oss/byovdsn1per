@@ -4543,7 +4543,10 @@ def match_primitive_patterns(driver_path: str, pattern_dir: Optional[str] = None
     try:
         pe = pefile.PE(driver_path, fast_load=True)
         pe.parse_data_directories(directories=[pefile.DIRECTORY_ENTRY['IMAGE_DIRECTORY_ENTRY_IMPORT']])
-    except (pefile.PEFormatError, OSError) as e:
+    except Exception as e:
+        # pefile wraps file-access errors (e.g. an AV-quarantined/locked file ->
+        # OSError errno 22) in a bare Exception, not OSError/PEFormatError, so we
+        # must catch broadly here or one unreadable driver aborts the whole sweep.
         result['error'] = f'pe-open: {e}'
         result['primitives_lifted'] = []
         return result
@@ -5152,34 +5155,46 @@ def _sweep_analyze_one(b, args) -> dict:
     """Per-driver scan used by --sweep, factored out so the sequential and
     parallel code paths run the EXACT same analysis (detection is unchanged;
     only the iteration strategy differs).
+
+    Never raises: a single unreadable driver (AV-quarantined, locked, corrupt)
+    must not abort a multi-hundred-driver sweep. On failure it returns a SKIP
+    result carrying the error so the run continues and the failure is visible.
     """
-    if args.quick:
-        r = quick_scan(str(b), offline=args.offline_mode)
-    else:
-        r = full_scan(str(b), args.depth, False,
-                      args.deep, False, args.verify_load,
-                      offline=args.offline_mode,
-                      pattern_dir=args.patterns,
-                      do_patterns=not args.no_patterns,
-                      patterns_only=args.patterns_only)
-    r['path'] = str(b)
-    r['cve_matches'] = match_cves(r)
-    sc, tr = perfect_score(r)
-    r['_score'] = sc
-    r['_tier'] = tr
-    sev, sev_label = severity_score(r)
-    r['_severity'] = sev
-    r['_severity_label'] = sev_label
-    if args.strings:
-        s = extract_strings(str(b))
-        if 'top_ascii' in s:
-            s['top_ascii'] = s['top_ascii'][:args.max_strings]
-        if 'top_utf16' in s:
-            s['top_utf16'] = s['top_utf16'][:args.max_strings]
-        r['strings'] = s
-    if args.yara_rule:
-        r['yara_rule'] = emit_yara_rule(r)
-    return r
+    try:
+        if args.quick:
+            r = quick_scan(str(b), offline=args.offline_mode)
+        else:
+            r = full_scan(str(b), args.depth, False,
+                          args.deep, False, args.verify_load,
+                          offline=args.offline_mode,
+                          pattern_dir=args.patterns,
+                          do_patterns=not args.no_patterns,
+                          patterns_only=args.patterns_only)
+        r['path'] = str(b)
+        r['cve_matches'] = match_cves(r)
+        sc, tr = perfect_score(r)
+        r['_score'] = sc
+        r['_tier'] = tr
+        sev, sev_label = severity_score(r)
+        r['_severity'] = sev
+        r['_severity_label'] = sev_label
+        if args.strings:
+            s = extract_strings(str(b))
+            if 'top_ascii' in s:
+                s['top_ascii'] = s['top_ascii'][:args.max_strings]
+            if 'top_utf16' in s:
+                s['top_utf16'] = s['top_utf16'][:args.max_strings]
+            r['strings'] = s
+        if args.yara_rule:
+            r['yara_rule'] = emit_yara_rule(r)
+        return r
+    except Exception as e:
+        return {
+            'driver': str(b), 'path': str(b),
+            'error': f'{type(e).__name__}: {e}',
+            'analyze_time_s': 0.0, 'cve_matches': [],
+            '_score': 0, '_tier': 'SKIP', '_severity': 0, '_severity_label': '',
+        }
 
 def _sha256_file(path: str) -> str:
     import hashlib
@@ -5969,7 +5984,7 @@ def _csv_dump(results: list) -> str:
     return out.getvalue()
 
 
-VERSION = 'v2.16.0'
+VERSION = 'v2.16.1'
 
 USAGE_EPILOG = r"""
 =========================================================================
@@ -6531,6 +6546,11 @@ def main():
             return ' cves=' + ','.join(
                 f"{m['cve']}({m['confidence'][0]})" for m in strong[:3])
 
+        def _err_tag(r):
+            # make an unreadable/blocked driver visible instead of a silent SKIP
+            e = r.get('error')
+            return f" {C.YELLOW}ERR: {str(e)[:60]}{C.RESET}" if e else ''
+
         if jobs > 1:
             # Pre-warm the shared pattern cache once in the main thread so
             # workers don't race to populate it on first use.
@@ -6559,7 +6579,7 @@ def main():
                         elapsed = time.time() - sweep_start
                         eta_str = f" eta={_format_eta(elapsed / done * (len(bins) - done))}"
                     print(f"  [{done}/{len(bins)}] {b.name[:40]} {tr} ({sc}) "
-                          f"t={r.get('analyze_time_s',0):.1f}s{eta_str}{_poc_tags(r)}",
+                          f"t={r.get('analyze_time_s',0):.1f}s{eta_str}{_poc_tags(r)}{_err_tag(r)}",
                           flush=True)
                     results.append(r)
                     if done % 10 == 0:
@@ -6586,7 +6606,7 @@ def main():
                         avg = sum(recent_times) / len(recent_times)
                         eta_str = f" eta={_format_eta(avg * (len(bins) - i))}"
                     print(f" {tr} ({sc}) t={r.get('analyze_time_s',0):.1f}s{eta_str}"
-                          f"{_poc_tags(r)}")
+                          f"{_poc_tags(r)}{_err_tag(r)}")
                     results.append(r)
                     if i % 10 == 0:
                         _flush_results()
@@ -6605,6 +6625,16 @@ def main():
         elif args.filter == 'partial':
             results = [r for r in results if r.get('_score', 0) >= 30]
         results.sort(key=lambda r: r.get('_score', 0), reverse=True)
+
+        errored = [r for r in results if r.get('error')]
+        if errored:
+            print()
+            print(f"{C.YELLOW}{C.BOLD}=> {len(errored)} driver(s) skipped (unreadable: "
+                  f"AV-quarantined / locked / corrupt){C.RESET}")
+            for r in errored[:10]:
+                print(f"   {C.DIM}- {Path(r.get('path','?')).name}: {r['error'][:70]}{C.RESET}")
+            if len(errored) > 10:
+                print(f"   {C.DIM}... +{len(errored)-10} more{C.RESET}")
 
         saved = _flush_results()
         if saved:
