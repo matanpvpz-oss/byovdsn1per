@@ -5902,6 +5902,34 @@ def _last_sweep_path() -> Path:
     return files[0] if files else None
 
 
+def _list_sweeps() -> int:
+    """List saved sweep JSONs (newest first) with driver/skip counts, so you can
+    pick which one to `--resume FILE`."""
+    base = Path(os.environ.get('APPDATA', '.')) / 'BYOVDsn1per'
+    files = (sorted(base.glob('sweep_*.json'), key=lambda p: p.stat().st_mtime, reverse=True)
+             if base.is_dir() else [])
+    if not files:
+        print(f"{C.YELLOW}no sweep results in {base}{C.RESET}")
+        print(f"  run {C.BOLD}byovdsn1per --sweep{C.RESET} first")
+        return 1
+    print(f"{C.BOLD}Saved sweeps in {base}{C.RESET}  ({len(files)})")
+    print(f"  {'modified':<16}  {'drivers':>7}  {'skipped':>7}  file")
+    for p in files:
+        try:
+            data = json.loads(p.read_text(encoding='utf-8'))
+            n = len(data) if isinstance(data, list) else 0
+            errs = sum(1 for r in data if isinstance(r, dict) and r.get('error'))
+        except (OSError, json.JSONDecodeError):
+            n, errs = '?', '?'
+        mtime = time.strftime('%Y-%m-%d %H:%M', time.localtime(p.stat().st_mtime))
+        ncol = C.GREEN if isinstance(n, int) and n else C.DIM
+        print(f"  {mtime:<16}  {ncol}{n!s:>7}{C.RESET}  {errs!s:>7}  {p.name}")
+    print()
+    print(f"  {C.DIM}resume the biggest one with:{C.RESET}")
+    print(f"    {C.BOLD}byovdsn1per --sweep --all --resume \"{files[0]}\"{C.RESET}")
+    return 0
+
+
 def _show_sweep_json(path: Path) -> int:
     try:
         with open(path, 'r', encoding='utf-8') as f:
@@ -5984,7 +6012,7 @@ def _csv_dump(results: list) -> str:
     return out.getvalue()
 
 
-VERSION = 'v2.17.0'
+VERSION = 'v2.18.0'
 
 USAGE_EPILOG = r"""
 =========================================================================
@@ -6055,6 +6083,7 @@ ADD-ONS BY MODE -- only flags listed under a mode work with that mode
     --update / --upgrade full-repair self-update (artifacts + PATH + crawler dir + pefile)
     --list               summarise the crawler dir
     --last-sweep         re-display most recent sweep JSON
+    --list-sweeps        list saved sweeps + counts (pick a --resume FILE)
     --show FILE          re-display any sweep JSON
     --hvci-only DRIVER   HVCI flag verdict only
     --sign-verify DRIVER signtool /kp /v only
@@ -6188,6 +6217,8 @@ def main():
                           help='list what is in the crawler dir (count, size, top signers) and exit')
     shortcut.add_argument('--last-sweep', action='store_true',
                           help='re-display the most recent sweep JSON without re-scanning')
+    shortcut.add_argument('--list-sweeps', action='store_true',
+                          help='list all saved sweep JSONs with driver counts (to pick a --resume FILE)')
     shortcut.add_argument('--show', metavar='FILE',
                           help='re-display a saved sweep JSON file (e.g. from %%APPDATA%%\\BYOVDsn1per\\)')
     shortcut.add_argument('--hvci-only', '-H', action='store_true', help='print HVCI flag verdict and exit')
@@ -6229,9 +6260,10 @@ def main():
                              'not thread-safe); applies to crawl and --quick/--patterns-only sweeps.')
     tuning.add_argument('--filter', '-F', choices=['perfect', 'partial', 'any'], default='any',
                         help='[sweep-only] only show drivers >= tier')
-    tuning.add_argument('--resume', '-R', action='store_true',
-                        help='[sweep-only] continue a previous sweep: skip drivers already in the '
-                             'latest sweep JSON (or --json-out FILE) and append to it')
+    tuning.add_argument('--resume', '-R', nargs='?', const='__AUTO__', default=None, metavar='FILE',
+                        help='[sweep-only] continue a previous sweep: skip drivers already analyzed '
+                             'and append to that file. Bare --resume uses the latest sweep JSON; '
+                             '--resume FILE resumes that specific one (see --list-sweeps)')
     tuning.add_argument('--patterns', metavar='DIR', default=DEFAULT_PATTERN_DIR,
                         help=f'[single|sweep] directory of *.json byte-pattern files (default: {DEFAULT_PATTERN_DIR})')
     tuning.add_argument('--no-patterns', '-n', action='store_true',
@@ -6292,6 +6324,8 @@ def main():
         return _update()
     if getattr(args, 'list', False):
         return _list_crawler(args.crawl_out)
+    if getattr(args, 'list_sweeps', False):
+        return _list_sweeps()
     if args.last_sweep:
         p_last = _last_sweep_path()
         if not p_last:
@@ -6517,7 +6551,10 @@ def main():
         # and skip drivers already analyzed so a crashed/Ctrl+C'd sweep picks up
         # where it left off instead of redoing every IDA scan.
         if args.resume:
-            resume_src = Path(args.json_out) if args.json_out else _last_sweep_path()
+            if args.resume == '__AUTO__':
+                resume_src = Path(args.json_out) if args.json_out else _last_sweep_path()
+            else:
+                resume_src = Path(args.resume)   # explicit --resume FILE
             if resume_src and Path(resume_src).is_file():
                 try:
                     prev = json.loads(Path(resume_src).read_text(encoding='utf-8'))
