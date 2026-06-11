@@ -31,6 +31,10 @@ DRIVER_OBJ_MJ_OFFSET_X86            = 0x38
 
 _IDAPRO_AVAILABLE = None
 _IDAPRO_ERROR = None
+# Diagnostics populated by _idapro_available() so --doctor / error messages can
+# explain *why* idalib failed instead of echoing a raw ImportError.
+_IDA_DETECTED_DIR = None     # a dir that actually contains idalib.* (IDADIR or probed)
+_IDADIR_WAS_UNSET = None     # True if the user's IDADIR was missing/invalid at first probe
 
 
 @contextlib.contextmanager
@@ -44,10 +48,82 @@ def _silence_idalib_noise():
         sys.stdout, sys.stderr = saved_stdout, saved_stderr
         devnull.close()
 
+
+def _idalib_libname() -> str:
+    if os.name == 'nt':
+        return 'idalib.dll'
+    if sys.platform == 'darwin':
+        return 'libidalib.dylib'
+    return 'libidalib.so'
+
+
+def _idadir_has_lib(d) -> bool:
+    """True if directory d looks like an IDA 9.x install (contains idalib.*)."""
+    if not d:
+        return False
+    lib = _idalib_libname()
+    return os.path.isfile(os.path.join(d, lib)) or \
+        os.path.isfile(os.path.join(d, 'Contents', 'MacOS', lib))    # mac .app bundle
+
+
+def _detect_ida_dir() -> Optional[str]:
+    """Best-effort locate an IDA 9.x install that ships idalib. idalib.dll lives
+    inside the IDA install (NOT the pip package), and the idapro loader finds it
+    via the IDADIR env var. Search order: a valid IDADIR, then the usual install
+    roots (newest-named first), then the dir of any ida executable on PATH.
+    Returns the directory to use as IDADIR, or None."""
+    env = os.environ.get('IDADIR')
+    if _idadir_has_lib(env):
+        # normalise mac bundles to the dir that actually holds the lib
+        if os.path.isfile(os.path.join(env, 'Contents', 'MacOS', _idalib_libname())):
+            return os.path.join(env, 'Contents', 'MacOS')
+        return env
+
+    roots = []
+    if os.name == 'nt':
+        roots = [os.environ.get('ProgramFiles', r'C:\Program Files'),
+                 os.environ.get('ProgramFiles(x86)', r'C:\Program Files (x86)'),
+                 os.path.join(os.environ.get('LOCALAPPDATA', ''), 'Programs'),
+                 r'C:\Program Files']
+    elif sys.platform == 'darwin':
+        roots = ['/Applications', os.path.expanduser('~/Applications')]
+    else:
+        roots = ['/opt', '/usr/local', os.path.expanduser('~')]
+
+    candidates = []
+    for base in roots:
+        if base and os.path.isdir(base):
+            try:
+                for name in os.listdir(base):
+                    if 'ida' in name.lower():
+                        candidates.append(os.path.join(base, name))
+            except OSError:
+                pass
+    # newest-named install wins (e.g. "IDA Essential 9.3" before "9.0")
+    for d in sorted(set(candidates), reverse=True):
+        if _idadir_has_lib(d):
+            mac = os.path.join(d, 'Contents', 'MacOS')
+            return mac if os.path.isfile(os.path.join(mac, _idalib_libname())) else d
+
+    for exe in ('ida.exe', 'ida64.exe', 'ida', 'ida64'):
+        p = shutil.which(exe)
+        if p and _idadir_has_lib(os.path.dirname(p)):
+            return os.path.dirname(p)
+    return None
+
+
 def _idapro_available() -> bool:
-    global _IDAPRO_AVAILABLE, _IDAPRO_ERROR
+    global _IDAPRO_AVAILABLE, _IDAPRO_ERROR, _IDA_DETECTED_DIR, _IDADIR_WAS_UNSET
     if _IDAPRO_AVAILABLE is not None:
         return _IDAPRO_AVAILABLE
+    # idapro reads IDADIR at import time to locate idalib, so if the user never
+    # set it (the #1 cause of "Cannot load idalib.dll"), auto-detect the install
+    # and set it BEFORE importing. This makes every IDA mode self-heal, not just
+    # --doctor.
+    _IDADIR_WAS_UNSET = not _idadir_has_lib(os.environ.get('IDADIR'))
+    _IDA_DETECTED_DIR = _detect_ida_dir()
+    if _IDADIR_WAS_UNSET and _IDA_DETECTED_DIR:
+        os.environ['IDADIR'] = _IDA_DETECTED_DIR
     try:
         with _silence_idalib_noise():
             import idapro
@@ -64,11 +140,22 @@ def _require_ida_or_exit(flag_name: str, has_quick_fallback: bool = True) -> Non
     msg = [
         f"error: {flag_name} needs idalib (IDA Pro 9.x Essential+ Python bindings)",
         f"       reason: {_IDAPRO_ERROR}",
-        f"       install: pip install idapro    (from your IDA install directory)",
     ]
+    # Tailor the remedy to what we actually found on disk.
+    if _IDA_DETECTED_DIR and _IDADIR_WAS_UNSET:
+        # IDA is installed; we auto-set IDADIR but the load still failed.
+        msg.append(f"       found IDA at: {_IDA_DETECTED_DIR}")
+        msg.append(f"       likely a Python-version mismatch -- run idapyswitch in that dir,")
+        msg.append(f"       then: byovdsn1per --doctor")
+    elif _IDA_DETECTED_DIR:
+        msg.append(f"       IDADIR is set but idalib still won't load (Python-version mismatch?)")
+        msg.append(f"       try: idapyswitch in {_IDA_DETECTED_DIR}, then byovdsn1per --doctor")
+    else:
+        msg.append(f"       no IDA 9.x install found -- idalib ships with IDA (pip install idapro is not enough)")
+        msg.append(f"       install: IDA Pro/Essential 9.0+, or set IDADIR to your install dir")
     if has_quick_fallback:
         msg.append(f"       or:      add --quick to skip IDA-based dispatcher analysis")
-    msg.append(f"       see also: byovdsn1per --doctor")
+    msg.append(f"       see also: byovdsn1per --doctor  (auto-detects IDA; --fix persists IDADIR)")
     for line in msg:
         print(line, file=sys.stderr)
     sys.exit(2)
@@ -5174,6 +5261,21 @@ def _user_path_has(install_dir: str):
     return (present, True)
 
 
+def _broadcast_env_change():
+    """Tell running processes the user environment changed so new shells pick
+    up the edit without a logout. Windows-only, best-effort."""
+    if os.name != 'nt':
+        return
+    try:
+        import ctypes
+        HWND_BROADCAST, WM_SETTINGCHANGE, SMTO_ABORTIFHUNG = 0xFFFF, 0x1A, 0x2
+        ctypes.windll.user32.SendMessageTimeoutW(
+            HWND_BROADCAST, WM_SETTINGCHANGE, 0, 'Environment',
+            SMTO_ABORTIFHUNG, 5000, ctypes.byref(ctypes.c_ulong()))
+    except Exception:
+        pass
+
+
 def _ensure_user_path(install_dir: str):
     """Windows: prepend install_dir to the persistent user PATH if absent,
     preserving the existing value and its registry type, then broadcast the
@@ -5181,7 +5283,7 @@ def _ensure_user_path(install_dir: str):
     if os.name != 'nt':
         return (False, 'not on Windows -- user PATH not modified')
     try:
-        import winreg, ctypes
+        import winreg
     except Exception as e:
         return (False, f'winreg unavailable: {e}')
     try:
@@ -5199,14 +5301,36 @@ def _ensure_user_path(install_dir: str):
             winreg.SetValueEx(key, 'Path', 0, typ or winreg.REG_EXPAND_SZ, new_val)
     except OSError as e:
         return (False, f'PATH update failed: {e}')
-    try:
-        HWND_BROADCAST, WM_SETTINGCHANGE, SMTO_ABORTIFHUNG = 0xFFFF, 0x1A, 0x2
-        ctypes.windll.user32.SendMessageTimeoutW(
-            HWND_BROADCAST, WM_SETTINGCHANGE, 0, 'Environment',
-            SMTO_ABORTIFHUNG, 5000, ctypes.byref(ctypes.c_ulong()))
-    except Exception:
-        pass
+    _broadcast_env_change()
     return (True, 'added to user PATH (open a NEW terminal to pick it up)')
+
+
+def _persist_env_var(name: str, value: str):
+    """Set a user environment variable both in this process (so the current run
+    sees it immediately) and persistently. On Windows that's HKCU\\Environment;
+    elsewhere we can only set it for this process. Returns (changed, message)."""
+    os.environ[name] = value
+    if os.name != 'nt':
+        return (True, f'{name} set for this session (add `export {name}={value}` '
+                      f'to your shell profile to persist)')
+    try:
+        import winreg
+    except Exception as e:
+        return (True, f'{name} set for this process only (winreg unavailable: {e})')
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, 'Environment', 0,
+                            winreg.KEY_READ | winreg.KEY_WRITE) as key:
+            try:
+                cur, _typ = winreg.QueryValueEx(key, name)
+            except FileNotFoundError:
+                cur = None
+            if cur == value:
+                return (False, f'{name} already persisted to {value}')
+            winreg.SetValueEx(key, name, 0, winreg.REG_SZ, value)
+    except OSError as e:
+        return (False, f'{name} persist failed: {e}')
+    _broadcast_env_change()
+    return (True, f'{name} persisted to user environment = {value} (new shells get it)')
 
 
 def _ensure_pefile(do_install: bool):
@@ -5333,24 +5457,63 @@ def _doctor(fix: bool = False) -> int:
         print(f"  {C.YELLOW}needs 3.10 or newer{C.RESET}")
     print()
     print(f"{C.BOLD}idalib (IDA Pro headless){C.RESET}")
-    if _idapro_available():
+    # _idapro_available() probes IDADIR, auto-detects the install, and records
+    # diagnostics in the module globals we read below.
+    ida_ok = _idapro_available()
+    ida_dir = _IDA_DETECTED_DIR
+    idadir_env_raw = os.environ.get('IDADIR')
+    setx_cmd = (f'setx IDADIR "{ida_dir}"' if os.name == 'nt'
+                else f'export IDADIR="{ida_dir}"')
+    if ida_ok:
         try:
             import idapro as _idapro
             idapath = getattr(_idapro, '__file__', '?')
         except Exception:
             idapath = '?'
         print(f"  {C.GREEN}import idapro: OK{C.RESET}  ({idapath})")
+        print(f"  {C.DIM}idalib dir: {ida_dir or idadir_env_raw or '?'}{C.RESET}")
         print(f"  {C.GREEN}all modes available: --quick, full scan, --deep, --sweep, --diff, --decompile{C.RESET}")
+        if _IDADIR_WAS_UNSET and ida_dir:
+            # Working only because we auto-set IDADIR this run; persist it so
+            # every future shell + the byovdsn1per command resolves IDA too.
+            print(f"  {C.YELLOW}- IDADIR was not set in your environment -- auto-detected this run{C.RESET}")
+            print(f"  {C.DIM}    persist it (otherwise other tools/shells won't find IDA):{C.RESET}")
+            print(f"  {C.DIM}    {setx_cmd}{C.RESET}")
+            issues.append('idadir-not-persistent')
+            if fix:
+                changed, msg = _persist_env_var('IDADIR', ida_dir)
+                print(f"  {(C.GREEN + '+ ') if changed else (C.DIM)}{msg}{C.RESET}")
+                if changed:
+                    fixed.append('idadir-persisted')
     else:
         print(f"  {C.YELLOW}import idapro: FAIL{C.RESET}  ({_IDAPRO_ERROR})")
-        print(f"  {C.DIM}install: pip install idapro    (from your IDA install directory){C.RESET}")
-        print(f"  {C.DIM}IDA-free modes that still work:{C.RESET}")
-        print(f"  {C.DIM}    --quick, --hvci-only, --sign-verify, --hashes-only,{C.RESET}")
-        print(f"  {C.DIM}    --cve-list, --crawl, --deepcrawl, --restart, --list,{C.RESET}")
-        print(f"  {C.DIM}    --list-default-roots, --doctor{C.RESET}")
-        print(f"  {C.DIM}    --diff / --sweep ONLY when combined with --quick{C.RESET}")
-        print(f"  {C.DIM}    --strings / --yara-rule / --poc are modifiers; they work whenever the{C.RESET}")
-        print(f"  {C.DIM}      underlying scan does (so add --quick on a no-IDA box){C.RESET}")
+        if ida_dir:
+            # IDA *is* installed; the loader just couldn't use it.
+            print(f"  {C.GREEN}+ found IDA install: {ida_dir}{C.RESET}  (has {_idalib_libname()})")
+            print(f"  {C.YELLOW}- idalib present but won't load -- almost always a Python-version mismatch{C.RESET}")
+            idapyswitch = os.path.join(ida_dir, 'idapyswitch.exe' if os.name == 'nt' else 'idapyswitch')
+            print(f"  {C.DIM}    point IDA at this Python ({sys.version.split()[0]}):{C.RESET}")
+            print(f"  {C.DIM}    \"{idapyswitch}\"{C.RESET}")
+            if _IDADIR_WAS_UNSET:
+                print(f"  {C.DIM}    (IDADIR was unset; also run: {setx_cmd}){C.RESET}")
+                if fix:
+                    changed, msg = _persist_env_var('IDADIR', ida_dir)
+                    print(f"  {(C.GREEN + '+ ') if changed else C.DIM}{msg}{C.RESET}")
+                    if changed:
+                        fixed.append('idadir-persisted')
+            issues.append('idalib-load-failed')
+        else:
+            print(f"  {C.DIM}no IDA 9.x install found in the usual locations{C.RESET}")
+            print(f"  {C.DIM}idalib ships with IDA 9.0+ -- `pip install idapro` alone is NOT enough{C.RESET}")
+            print(f"  {C.DIM}install IDA Pro/Essential 9.0+, then re-run --doctor (it auto-detects){C.RESET}")
+            print(f"  {C.DIM}or set IDADIR manually if IDA lives somewhere unusual{C.RESET}")
+            print(f"  {C.DIM}IDA-free modes that still work:{C.RESET}")
+            print(f"  {C.DIM}    --quick, --hvci-only, --sign-verify, --hashes-only,{C.RESET}")
+            print(f"  {C.DIM}    --cve-list, --crawl, --deepcrawl, --restart, --list,{C.RESET}")
+            print(f"  {C.DIM}    --list-default-roots, --doctor{C.RESET}")
+            print(f"  {C.DIM}    --diff / --sweep ONLY when combined with --quick{C.RESET}")
+            print(f"  {C.DIM}    --strings / --yara-rule / --poc are modifiers; they work whenever the{C.RESET}")
+            print(f"  {C.DIM}      underlying scan does (so add --quick on a no-IDA box){C.RESET}")
     print()
     print(f"{C.BOLD}pefile (pattern matcher PE parser){C.RESET}")
     # do_install=fix lets a single call both diagnose and (in fix mode) repair.
@@ -5806,7 +5969,7 @@ def _csv_dump(results: list) -> str:
     return out.getvalue()
 
 
-VERSION = 'v2.15.0'
+VERSION = 'v2.16.0'
 
 USAGE_EPILOG = r"""
 =========================================================================

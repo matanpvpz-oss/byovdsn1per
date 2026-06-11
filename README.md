@@ -22,7 +22,7 @@ Also: `--diff` for side-by-side comparison of two drivers, `--strings` with rege
 powershell -ExecutionPolicy Bypass -File install.ps1
 ```
 
-Copies the script to `%LOCALAPPDATA%\Programs\BYOVDsn1per\` and adds it to your user PATH. No admin needed. Open a new terminal and `byovdsn1per --version` should print v2.15.
+Copies the script to `%LOCALAPPDATA%\Programs\BYOVDsn1per\` and adds it to your user PATH. No admin needed. Open a new terminal and `byovdsn1per --version` should print v2.16.
 
 After install, run `byovdsn1per --doctor` to confirm Python, idalib, pefile, the Windows signing tools, **and the user PATH entry** are all in place. It also shows where the default crawl output dir resolves on your machine.
 
@@ -45,6 +45,16 @@ Python 3.10 or newer.
 
 For full IOCTL-dispatcher analysis you need IDA Pro Essential 9.3+ with the `idapro` Python package installed. The signing/HVCI path calls Windows-only tools: PowerShell's `Get-AuthenticodeSignature` and `signtool /kp`. The PE-info pipeline is pure-stdlib and works anywhere Python runs.
 
+#### Finding idalib (`IDADIR`)
+
+`idalib` is loaded from your IDA install, which the `idapro` loader locates via the **`IDADIR`** environment variable. The classic failure is `Cannot load IDA library file idalib.dll … the IDADIR environment variable is set` — that means IDA is installed but `IDADIR` isn't pointing at it.
+
+The scanner now **auto-detects** the install: before importing `idapro` it probes `IDADIR`, then the usual roots (`C:\Program Files\IDA *`, `/opt`, `/Applications`, `~`, plus any `ida` on `PATH`) for the folder containing `idalib.*`, and sets `IDADIR` for that run if you hadn't. So an IDA mode usually just works even with `IDADIR` unset.
+
+- `byovdsn1per --doctor` tells you where it found IDA and whether `IDADIR` is persisted.
+- `byovdsn1per --doctor --fix` writes `IDADIR` to your user environment so every shell (not just this run) resolves IDA.
+- If `idalib` is found but still won't load, it's almost always a Python-version mismatch — run `idapyswitch` from the IDA folder to point IDA at your interpreter.
+
 ### What works without IDA
 
 These run silently on a no-IDA box:
@@ -56,7 +66,7 @@ These run silently on a no-IDA box:
 | `--cve-list` | print the matcher database |
 | `--crawl`, `--deepcrawl`, `--restart` | filesystem walk + PE-header check, no disassembly |
 | `--list`, `--list-default-roots` | inspect crawler contents / show crawl roots |
-| `--doctor` | reports whether idalib was found, lists IDA-free modes |
+| `--doctor` | auto-detects the IDA install, diagnoses/persists `IDADIR`, lists IDA-free modes |
 | `--sweep --quick`, `--diff --quick a b` | the `--quick` modifier skips IDA in those modes too |
 | `--strings`, `--yara-rule`, `--poc` | per-driver modifiers; they work whenever the underlying scan does |
 
@@ -67,10 +77,13 @@ These will block with a friendly error if idalib is missing, exit code 2:
 ```
 error: full scan (default mode) needs idalib (IDA Pro 9.x Essential+ Python bindings)
        reason: ModuleNotFoundError: No module named 'idapro'
-       install: pip install idapro    (from your IDA install directory)
+       no IDA 9.x install found -- idalib ships with IDA (pip install idapro is not enough)
+       install: IDA Pro/Essential 9.0+, or set IDADIR to your install dir
        or:      add --quick to skip IDA-based dispatcher analysis
-       see also: byovdsn1per --doctor
+       see also: byovdsn1per --doctor  (auto-detects IDA; --fix persists IDADIR)
 ```
+
+The error adapts to what's on disk: if IDA *is* installed but `idalib` won't load, it prints the detected path and points you at `idapyswitch` instead.
 
 | Mode | Why |
 |---|---|
