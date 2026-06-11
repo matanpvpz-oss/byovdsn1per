@@ -22,7 +22,7 @@ Also: `--diff` for side-by-side comparison of two drivers, `--strings` with rege
 powershell -ExecutionPolicy Bypass -File install.ps1
 ```
 
-Copies the script to `%LOCALAPPDATA%\Programs\BYOVDsn1per\` and adds it to your user PATH. No admin needed. Open a new terminal and `byovdsn1per --version` should print v2.16.
+Copies the script to `%LOCALAPPDATA%\Programs\BYOVDsn1per\` and adds it to your user PATH. No admin needed. Open a new terminal and `byovdsn1per --version` should print v2.17.
 
 After install, run `byovdsn1per --doctor` to confirm Python, idalib, pefile, the Windows signing tools, **and the user PATH entry** are all in place. It also shows where the default crawl output dir resolves on your machine.
 
@@ -181,9 +181,12 @@ byovdsn1per --sweep                       # the crawler output dir
 byovdsn1per --sweep D:\my_drivers          # any folder you like
 byovdsn1per --sweep --filter perfect       # only PERFECT/STRONG tier
 byovdsn1per --sweep --all                  # full enrichment: --deep --poc --strings --yara-rule --verify-load
+byovdsn1per --sweep --all --resume         # pick up where a stopped/crashed sweep left off
 ```
 
 Sweep auto-saves a JSON of all per-driver results to `%APPDATA%\BYOVDsn1per\sweep_<timestamp>.json`. Ctrl+C is safe — partial results are flushed every 10 drivers and again on exit (via an `atexit` handler). The summary tells you exactly where the file landed.
+
+**Resuming.** A plain `--sweep` always starts from the first driver. To continue a sweep that was Ctrl+C'd or died partway (a full IDA sweep of a thousand drivers is slow), add `--resume`/`-R`: it reloads the latest `sweep_*.json` (or your `--json-out FILE`), skips every driver already in it, analyzes only what's left, and **appends to that same file**. One bad driver no longer aborts the run either — unreadable/AV-quarantined/locked files are skipped with an `ERR:` note and summarised at the end, so the sweep always reaches the end and `--resume` only ever has the genuinely-missing ones to do.
 
 ## Crawl
 

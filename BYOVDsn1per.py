@@ -5984,7 +5984,7 @@ def _csv_dump(results: list) -> str:
     return out.getvalue()
 
 
-VERSION = 'v2.16.1'
+VERSION = 'v2.17.0'
 
 USAGE_EPILOG = r"""
 =========================================================================
@@ -6021,6 +6021,7 @@ ADD-ONS BY MODE -- only flags listed under a mode work with that mode
     --verify-load      signtool /kp /v per driver
     --burnt-check      drop drivers signed by burnt certificates  *
     --filter TIER      only show STRONG / PERFECT (TIER = perfect | partial | any)  *
+    --resume / -R      continue the last sweep: skip already-analyzed, append  *
     --size-cap N       skip drivers > N MB
     --jobs N / -j N    parallel workers (--quick/--patterns-only sweeps; default = cores, max 8)
     --output FMT       table | json | markdown | csv
@@ -6114,7 +6115,7 @@ SHORT FLAGS  (every common long flag has a one-letter alias)
   Add-ons:  -P --poc       -S --strings   -y --yara-rule -b --burnt-check
             -E --explain   -m --max-strings -z --offline-mode
   Output:   -O --output    -q --quiet     -vv --verbose
-  Tuning:   -j --jobs      -F --filter    -n --no-patterns
+  Tuning:   -j --jobs      -F --filter    -n --no-patterns  -R --resume
 
   e.g.  byovdsn1per -Qz driver.sys        (== --quick --offline-mode)
         byovdsn1per -aF perfect -s        (== --all --filter perfect --sweep)
@@ -6228,6 +6229,9 @@ def main():
                              'not thread-safe); applies to crawl and --quick/--patterns-only sweeps.')
     tuning.add_argument('--filter', '-F', choices=['perfect', 'partial', 'any'], default='any',
                         help='[sweep-only] only show drivers >= tier')
+    tuning.add_argument('--resume', '-R', action='store_true',
+                        help='[sweep-only] continue a previous sweep: skip drivers already in the '
+                             'latest sweep JSON (or --json-out FILE) and append to it')
     tuning.add_argument('--patterns', metavar='DIR', default=DEFAULT_PATTERN_DIR,
                         help=f'[single|sweep] directory of *.json byte-pattern files (default: {DEFAULT_PATTERN_DIR})')
     tuning.add_argument('--no-patterns', '-n', action='store_true',
@@ -6506,12 +6510,46 @@ def main():
             Path(auto_save).parent.mkdir(parents=True, exist_ok=True)
         except OSError:
             pass
+        results = []
+        interrupted = False
+
+        # --resume: reload a previous run's results, append to that same file,
+        # and skip drivers already analyzed so a crashed/Ctrl+C'd sweep picks up
+        # where it left off instead of redoing every IDA scan.
+        if args.resume:
+            resume_src = Path(args.json_out) if args.json_out else _last_sweep_path()
+            if resume_src and Path(resume_src).is_file():
+                try:
+                    prev = json.loads(Path(resume_src).read_text(encoding='utf-8'))
+                    if isinstance(prev, list):
+                        results = prev
+                        auto_save = str(resume_src)   # keep accumulating in place
+                        done_paths = {os.path.normcase(os.path.normpath(r['path']))
+                                      for r in results if r.get('path')}
+                        before = len(bins)
+                        bins = [b for b in bins
+                                if os.path.normcase(os.path.normpath(str(b))) not in done_paths]
+                        print(f"[BYOVDsn1per] {C.GREEN}--resume{C.RESET}: loaded "
+                              f"{len(results)} prior result(s) from {resume_src}")
+                        print(f"[BYOVDsn1per] skipping {before - len(bins)} done; "
+                              f"{C.BOLD}{len(bins)} remaining{C.RESET}")
+                    else:
+                        print(f"[BYOVDsn1per] {C.YELLOW}--resume: {resume_src} is not a sweep "
+                              f"result list; starting fresh{C.RESET}")
+                except (OSError, json.JSONDecodeError) as e:
+                    print(f"[BYOVDsn1per] {C.YELLOW}--resume: could not read prior results "
+                          f"({e}); starting fresh{C.RESET}")
+            else:
+                print(f"[BYOVDsn1per] {C.YELLOW}--resume: no prior sweep JSON found; "
+                      f"starting fresh{C.RESET}")
+            if not bins:
+                print(f"{C.GREEN}{C.BOLD}=> nothing left to do -- all drivers already "
+                      f"analyzed in {auto_save}{C.RESET}")
+                return 0
+
         print(f"[BYOVDsn1per] results will be saved to: {auto_save}")
         print(f"[BYOVDsn1per] Ctrl+C is safe — partial results auto-save every 10 drivers")
         print()
-
-        results = []
-        interrupted = False
 
         def _flush_results():
             try:
