@@ -1,0 +1,55 @@
+{
+  "name": "PROCESS_KILL_PsLookupZwTerminate",
+  "primitive": "PROCESS_KILL",
+  "confidence": "HIGH",
+  "min_arch": "x64",
+  "byte_sequences": [
+    {
+      "hex": "45 33 C9 45 33 C0 33 D2 FF 15 ?? ?? ?? ?? 85 C0",
+      "min_occurrences": 1
+    },
+    {
+      "hex": "45 33 C9 C6 44 24 ?? 00 45 33 C0 33 D2 48 C7 44 24 ?? 00 00 00 00 FF 15 ?? ?? ?? ?? 8B D8 85 C0",
+      "min_occurrences": 1
+    },
+    {
+      "hex": "45 33 C9 48 89 44 24 30 45 33 C0 33 D2 44 88 7C 24 28 4C 89 7C 24 20 FF 15 ?? ?? ?? ?? 41 3B C7",
+      "min_occurrences": 1
+    },
+    {
+      "hex": "8B D8 85 C0 ?? ?? 48 8B 4C 24 ?? 33 D2 FF 15 ?? ?? ?? ??",
+      "min_occurrences": 1
+    },
+    {
+      "hex": "41 3B C7 8B D8 ?? ?? 48 8B 4C 24 ?? 33 D2 FF 15 ?? ?? ?? ??",
+      "min_occurrences": 1
+    }
+  ],
+  "import_required": [
+    "PsLookupProcessByProcessId",
+    "ObOpenObjectByPointer",
+    "ZwTerminateProcess"
+  ],
+  "import_forbidden": [
+    "SeAccessCheck",
+    "SeSinglePrivilegeCheck"
+  ],
+  "negative_strings": [
+    "WUDF",
+    "BitLocker",
+    "fvevol",
+    "AppId Helper"
+  ],
+  "positive_strings": [
+    "TerminateProcess",
+    "KillProcess",
+    "ProcessId",
+    "EPROCESS"
+  ],
+  "reference_drivers": [
+    "K7RKScan_2310_5c6ce55a.sys",
+    "K7RKScan_1516_b16e217c.sys",
+    "mhyprot2.Sys"
+  ],
+  "notes": "MSVC x64 PROCESS_KILL primitive: caller-PID -> PsLookupProcessByProcessId -> ObOpenObjectByPointer(EPROCESS, *, KernelMode) -> ZwTerminateProcess(handle, 0). Three driver-variant anchors capture observed MSVC lowerings (sequences 1-3), plus two ObOpen-result-test + ZwTerminate-tail anchors (sequences 4-5) covering test/cmp variants. Import triad gate (PsLookup+ObOpen+ZwTerm) is mandatory for HIGH confidence; on the full Windows\\System32\\drivers corpus (461 drivers, 92 with at least one triad import) only appid.sys (CVE-2024-21338 Lazarus BYOVD) passes the gate after pattern hits. HIGH confidence + open_dispatch should lift score to STRONG floor 70."
+}

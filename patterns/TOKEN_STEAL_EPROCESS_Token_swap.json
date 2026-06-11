@@ -1,0 +1,74 @@
+{
+  "name": "TOKEN_STEAL_EPROCESS_Token_swap",
+  "primitive": "TOKEN_STEAL",
+  "confidence": "LOW",
+  "min_arch": "x64",
+  "byte_sequences": [
+    {
+      "hex": "48 8B ?? 68 02 00 00",
+      "min_occurrences": 1
+    },
+    {
+      "hex": "48 8B ?? 70 02 00 00",
+      "min_occurrences": 1
+    },
+    {
+      "hex": "48 8B ?? 60 02 00 00",
+      "min_occurrences": 1
+    },
+    {
+      "hex": "48 89 ?? 68 02 00 00",
+      "min_occurrences": 1
+    },
+    {
+      "hex": "48 89 ?? 70 02 00 00",
+      "min_occurrences": 1
+    },
+    {
+      "hex": "48 89 ?? 60 02 00 00",
+      "min_occurrences": 1
+    },
+    {
+      "hex": "FF 15 ?? ?? ?? ?? 48 8B ?? ?? ?? 02 00 00 48",
+      "min_occurrences": 1
+    },
+    {
+      "hex": "FF 15 ?? ?? ?? ?? 48 8B ?? ?? ?? B8 04 00 00 00 F0 48 0F",
+      "min_occurrences": 1
+    }
+  ],
+  "import_required": [
+    "PsLookupProcessByProcessId"
+  ],
+  "import_forbidden": [
+    "SeAccessCheck",
+    "SeSinglePrivilegeCheck",
+    "SeAuditingFileOrGlobalEvents"
+  ],
+  "negative_strings": [
+    "Scsi",
+    "SCSI",
+    "RAID",
+    "StorPort",
+    "AHCI",
+    "iaStor",
+    "BitLocker",
+    "fvevol",
+    "WUDF",
+    "AppId Helper",
+    "ScsiPortInitialize"
+  ],
+  "positive_strings": [
+    "EPROCESS",
+    "Token",
+    "PsInitialSystemProcess",
+    "PsLookupProcessByProcessId",
+    "ProcessId"
+  ],
+  "reference_drivers": [
+    "aswArPot.sys (Avast aswArPot, gated TP via +0x260 EPROCESS field read with PsLookupProcessByProcessId imported)",
+    "xhunter1.sys (TXGuard CVE-2022-42045, gated TP via +0x268 EPROCESS field read with PsLookupProcessByProcessId imported)",
+    "compiled_lab_driverv2.sys (in-house lab driver, gated TP via multi-displacement EPROCESS field reads)"
+  ],
+  "notes": "Detects MSVC x64 lowerings of EPROCESS-field reads at displacements that, on Windows 10/11 builds, correspond to the _EPROCESS.Token (0x258-0x4b8 depending on build), _EPROCESS.ImageFileName (0x5a8), _EPROCESS.ActiveProcessLinks (0x448), or related sensitive fields. Sequences 1-3 catch 'mov reg, qword ptr [reg + 0x268/0x270/0x260]' the canonical fetch idiom; sequences 4-6 catch 'mov qword ptr [reg + 0x2XX], reg' the inverse store idiom; sequences 7-8 catch the PsLookupProcessByProcessId-then-EPROCESS-field-fetch pair, including the InterlockedExchangePointer variant 'call PsLookup; mov rax,[reg+disp32]; mov eax,4; lock cmpxchg'. This pattern is LOW confidence because the +0x258/+0x260/+0x268/+0x270/+0x278 displacements are also common in legitimate process-management code (e.g., Process Explorer's PsLookup pump uses EPROCESS field reads at +0x270 to read process names without doing a token swap). The named reference candidates procexp.Sys and mhyprot2.Sys do NOT match this pattern after gating (procexp.Sys uses small displacements 0x120/0x138 for DRIVER_OBJECT/file-object field reads; mhyprot2.Sys uses MmCopyVirtualMemory for memory primitives and lacks the +0x2XX EPROCESS displacement reads entirely) - their archetypes are MEMORY_RW + PROCESS_KILL, not TOKEN_STEAL. Empirically validated on 58-driver knownvuln corpus + 10-driver inbox benign sample: 3 gated TPs (aswArPot.sys via +0x260; xhunter1.sys via +0x268; compiled_lab_driverv2.sys multi-displacement). Zero FPs on the benign sample because (a) all Windows inbox drivers tested either lack PsLookupProcessByProcessId (http.sys, hvservice.sys, tcpip.sys, ndis.sys, storport.sys, fvevol.sys, ntfs.sys all fail import_required gate even when raw byte hits are present), or carry SeAccessCheck which is in import_forbidden. Because confidence is LOW, the pattern matcher engine grants +5 score (not the +25 HIGH-confidence lift) and does NOT trigger the PATTERN_HIGH+OPEN_DISPATCH STRONG-floor; it contributes only +3 to severity_score. Engine treats LOW-confidence hits as informational. HIGH-confidence elevation would require additional structural validation (e.g., post-PsLookup InterlockedExchangePointer lowering byte sequence verification) which is beyond the static-byte-level discrimination this engine performs."
+}

@@ -1,0 +1,56 @@
+{
+  "name": "DSE_DISABLE_g_CiOptions",
+  "primitive": "DSE_DISABLE",
+  "confidence": "HIGH",
+  "min_arch": "x64",
+  "byte_sequences": [
+    {
+      "hex": "48 8d 15 ?? ?? ?? ?? 48 8b cf e8 ?? ?? ?? ?? 48 8b f8 48 85 c0 0f 84 ?? ?? ?? ?? 48 8b 48 10",
+      "min_occurrences": 1
+    },
+    {
+      "hex": "48 8b 48 10 45 8d ?? 04 48 8d 15 ?? ?? ?? ?? e8 ?? ?? ?? ?? 48 85 c0 0f 84",
+      "min_occurrences": 1
+    },
+    {
+      "hex": "ff 15 ?? ?? ?? ?? 48 8b 05 ?? ?? ?? ?? c6 00 00",
+      "min_occurrences": 1
+    }
+  ],
+  "import_required": [
+    "MmGetSystemRoutineAddress"
+  ],
+  "import_forbidden": [
+    "SeAccessCheck",
+    "SeSinglePrivilegeCheck"
+  ],
+  "negative_strings": [
+    "Scsi",
+    "SCSI",
+    "RAID",
+    "StorPort",
+    "AHCI",
+    "iaStor",
+    "BitLocker",
+    "fvevol",
+    "AppId Helper"
+  ],
+  "positive_strings": [
+    "CI.DLL",
+    "ci.dll",
+    "g_CiOptions",
+    "CiInitialize",
+    "CiValidateImageHeader",
+    "SeValidateImageData",
+    "KdDebuggerEnabled",
+    "KdDisableDebugger",
+    "ntoskrnl.exe",
+    "PsLoadedModuleList",
+    "MmGetSystemRoutineAddress"
+  ],
+  "reference_drivers": [
+    "aswArPot.sys (Avast aswArPot, sha256-anchored CI.DLL+PsLoadedModuleList walk + KLDR_DATA_TABLE_ENTRY[+0x10] DllBase + PE OptionalHeader walk to locate g_CiOptions; CVE-2022-26522 / CVE-2022-26523 family)",
+    "mhyprot2.Sys (miHoYo Genshin Impact anti-cheat, CVE-2022-32429; uses MmCopyVirtualMemory + KdDisableDebugger primitive set, with the canonical post-IAT-resolve zero-write idiom 'call [iat:Kd*]; mov rax,[iat:Kd*Enabled]; mov byte ptr [rax], 0' which is the same byte-level idiom an attacker uses to nuke g_CiOptions once its address is known)"
+  ],
+  "notes": "Detects the classical DSE_DISABLE primitive: locate ci.dll (or ntoskrnl.exe globals KdDebuggerEnabled / similar) and write 0 to the protection flag (g_CiOptions=0 disables Driver Signature Enforcement; KdDebuggerEnabled=0 is the sibling anti-debug nuke that uses the IDENTICAL byte-level lowering). Sequence (1) anchors aswArPot's canonical lowering at va 0x14001595a: 'lea rdx,[CI.DLL]; mov rcx,rdi; call walk_PsLoadedModuleList; mov rdi,rax; test rax,rax; jz fail; mov rcx,[rax+0x10]' where +0x10 is the DllBase field of KLDR_DATA_TABLE_ENTRY. Sequence (2) anchors the immediately-following PE Optional Header walk to locate the export by name ('mov rcx,[rax+0x10]; lea r8d,[r13+4]; lea rdx,[name]; call resolve_export; test rax,rax; jz fail'). Sequence (3) is the universal post-IAT-resolve zero-write 'call qword ptr [iat:KdDisableDebugger]; mov rax,qword ptr [iat:KdDebuggerEnabled]; mov byte ptr [rax],0' — observed verbatim in mhyprot2 at 0x140006b2f; the same byte sequence is what an attacker emits to set g_CiOptions=0 once resolved (the CALL + MOV-from-IAT + MOV-byte-zero triplet is what differentiates a kernel-state-disable primitive from a vanilla 'mov byte ptr [x],0' which appears in benign code dozens of times). Per-driver TP: aswArPot=1+1+0 (seq1+seq2 fire, seq3 absent because aswArPot patches g_CiOptions indirectly via export-table walk rather than direct byte-zero), mhyprot2=0+0+1 (seq3 nuke). Validation across 58-driver knownvuln corpus + 60 random Windows\\System32\\drivers benign sample: seq1 0 FP / seq2 0 FP / seq3 0 FP at HIGH verdict. HIGH confidence is contingent on (a) at least one byte_sequence hit AND (b) MmGetSystemRoutineAddress imported AND (c) at least one positive_string AND (d) no negative_string match; otherwise MEDIUM (byte hit alone) or LOW. The PsLoadedModuleList-walk lowering with KLDR_DATA_TABLE_ENTRY[+0x10]=DllBase / [+0x30]=BaseDllName stride-0x128 is captured by sequence (1)'s tail 'mov rcx,[rax+0x10]'. Only aswArPot in the corpus carries a literal CI.DLL string; the byte sequences are deliberately generalizable to drivers that obfuscate the CI.DLL string (e.g., XOR-decoded at runtime) by anchoring on the structural code idiom rather than the string. import_forbidden gates: SeAccessCheck/SeSinglePrivilegeCheck are present only on legitimate authorization-checking drivers (a real DSE_DISABLE primitive never gates itself behind these); WDF/KMDF imports are NOT in import_forbidden because mhyprot2 is itself WDF-bound; the byte-level idiom is the discriminator, not the framework."
+}

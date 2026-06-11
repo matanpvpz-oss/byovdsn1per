@@ -4331,6 +4331,191 @@ def _classify_handler(handler_ea, max_depth=2):
             classes.add(cls)
     return sorted(classes)
 
+DEFAULT_PATTERN_DIR = r'C:\Users\kj\Desktop\byovdsn1per\patterns'
+_PATTERN_CACHE: dict = {}
+
+
+def _compile_pattern_hex(hex_str: str):
+    toks = hex_str.split()
+    out = bytearray()
+    i = 0
+    while i < len(toks):
+        t = toks[i]
+        if t == '??':
+            run = 1
+            while i + 1 < len(toks) and toks[i + 1] == '??':
+                run += 1
+                i += 1
+            out += f'.{{{run}}}'.encode()
+        else:
+            out += b'\\x' + t.encode()
+        i += 1
+    return re.compile(bytes(out), re.DOTALL)
+
+
+def _read_text_sections(pe):
+    out = []
+    for s in pe.sections:
+        name = s.Name.rstrip(b'\x00').decode('latin-1', 'replace')
+        chars = s.Characteristics
+        if chars & IMAGE_SCN_MEM_EXECUTE or name.lower() in ('.text', 'pagedata', 'page', 'init', '.pagebgfx'):
+            out.append((name, s.PointerToRawData, bytes(s.get_data())))
+    return out
+
+
+def _load_pattern_db(pattern_dir: str):
+    import glob as _glob
+    if pattern_dir in _PATTERN_CACHE:
+        return _PATTERN_CACHE[pattern_dir]
+    loaded = []
+    if pattern_dir and os.path.isdir(pattern_dir):
+        for p in sorted(_glob.glob(os.path.join(pattern_dir, '*.json'))):
+            try:
+                with open(p, 'r', encoding='utf-8') as f:
+                    pat = json.load(f)
+                regs = [_compile_pattern_hex(b['hex']) for b in pat.get('byte_sequences', [])]
+                loaded.append((pat, regs))
+            except (json.JSONDecodeError, OSError, re.error, KeyError):
+                continue
+        priv = os.path.join(pattern_dir, 'private')
+        if os.path.isdir(priv):
+            for p in sorted(_glob.glob(os.path.join(priv, '*.json'))):
+                try:
+                    with open(p, 'r', encoding='utf-8') as f:
+                        pat = json.load(f)
+                    regs = [_compile_pattern_hex(b['hex']) for b in pat.get('byte_sequences', [])]
+                    loaded.append((pat, regs))
+                except (json.JSONDecodeError, OSError, re.error, KeyError):
+                    continue
+    _PATTERN_CACHE[pattern_dir] = loaded
+    return loaded
+
+
+def _read_raw_pe_bytes(path: str) -> bytes:
+    try:
+        with open(path, 'rb') as fh:
+            return fh.read()
+    except OSError:
+        return b''
+
+
+def _string_present_in_raw(needle: str, raw: bytes) -> bool:
+    if not needle or not raw:
+        return False
+    try:
+        if needle.encode('latin-1', 'ignore') in raw:
+            return True
+    except UnicodeEncodeError:
+        pass
+    try:
+        if needle.encode('utf-16-le', 'ignore') in raw:
+            return True
+    except UnicodeEncodeError:
+        pass
+    return False
+
+
+def match_primitive_patterns(driver_path: str, pattern_dir: Optional[str] = None,
+                             imports: Optional[set] = None,
+                             strings: Optional[list] = None) -> dict:
+    pattern_dir = pattern_dir or DEFAULT_PATTERN_DIR
+    imports = imports or set()
+    result = {'hits': [], 'primitives_lifted': set(), 'score_delta': 0,
+              'confidence': None, 'pattern_dir': pattern_dir}
+    try:
+        import pefile
+    except ImportError:
+        result['error'] = 'pefile not installed'
+        result['primitives_lifted'] = []
+        return result
+    try:
+        pe = pefile.PE(driver_path, fast_load=True)
+        pe.parse_data_directories(directories=[pefile.DIRECTORY_ENTRY['IMAGE_DIRECTORY_ENTRY_IMPORT']])
+    except (pefile.PEFormatError, OSError) as e:
+        result['error'] = f'pe-open: {e}'
+        result['primitives_lifted'] = []
+        return result
+    sections = _read_text_sections(pe)
+    patterns = _load_pattern_db(pattern_dir)
+    if not patterns:
+        result['error'] = 'no patterns loaded'
+        result['primitives_lifted'] = []
+        return result
+    raw = _read_raw_pe_bytes(driver_path)
+    conf_rank = {'HIGH': 3, 'MEDIUM': 2, 'LOW': 1}
+    best_rank = 0
+    for pat, regs in patterns:
+        req = set(pat.get('import_required', []))
+        forb = set(pat.get('import_forbidden', []))
+        if req and not req.issubset(imports):
+            continue
+        if forb and forb & imports:
+            continue
+        neg = pat.get('negative_strings', []) or []
+        if neg and raw and any(_string_present_in_raw(n, raw) for n in neg):
+            continue
+        pos = pat.get('positive_strings', []) or []
+        if pos and raw and not any(_string_present_in_raw(p, raw) for p in pos):
+            continue
+        total_occ = 0
+        offsets = []
+        any_seq_hit = False
+        seq_hits_per_idx = []
+        for seq, rx in zip(pat.get('byte_sequences', []), regs):
+            seq_occ = 0
+            for _, raw_off, data in sections:
+                for m in rx.finditer(data):
+                    seq_occ += 1
+                    offsets.append(raw_off + m.start())
+            seq_hits_per_idx.append(seq_occ)
+            if seq_occ >= int(seq.get('min_occurrences', 1)):
+                any_seq_hit = True
+                total_occ += seq_occ
+        if not any_seq_hit:
+            continue
+        conf = pat.get('confidence', 'LOW')
+        hit = {
+            'pattern': pat.get('name', '?'),
+            'primitive': pat.get('primitive', '?'),
+            'confidence': conf,
+            'occurrences': total_occ,
+            'sequence_hits': seq_hits_per_idx,
+            'file_offsets': offsets[:32],
+        }
+        result['hits'].append(hit)
+        if conf == 'HIGH':
+            result['primitives_lifted'].add(pat.get('primitive', '?'))
+            result['score_delta'] += 25
+        elif conf == 'MEDIUM':
+            result['score_delta'] += 10
+        else:
+            result['score_delta'] += 5
+        r = conf_rank.get(conf, 0)
+        if r > best_rank:
+            best_rank = r
+            result['confidence'] = conf
+    result['primitives_lifted'] = sorted(result['primitives_lifted'])
+    return result
+
+
+def _is_open_dispatch(result: dict) -> bool:
+    gates = set(result.get('gates_detected', []) or [])
+    bypassable = {'MAGIC_COOKIE', 'WEAK_BITNESS_CHECK_ONLY'}
+    if not gates:
+        return True
+    if gates <= bypassable:
+        return True
+    return False
+
+
+def _imports_set_from_pe_extended(pe: dict) -> set:
+    out = set()
+    for imp in (pe.get('imports') or []):
+        for api in imp.get('apis', []) or []:
+            out.add(api)
+    return out
+
+
 def severity_score(result: dict) -> tuple:
     h = result.get('hvci', {}) or {}
     prims = set(result.get('primitives', []) or [])
@@ -4371,6 +4556,16 @@ def severity_score(result: dict) -> tuple:
 
     if has_strong_cve:
         sev += 10
+
+    pm = result.get('pattern_matches', {}) or {}
+    for hit in (pm.get('hits') or []):
+        c = hit.get('confidence')
+        if c == 'HIGH':
+            sev += 10
+        elif c == 'MEDIUM':
+            sev += 5
+        else:
+            sev += 3
 
     if burnt:
         sev -= 15
@@ -4471,6 +4666,21 @@ def perfect_score(result: dict) -> tuple:
     cve_confs = {m.get('confidence', 'LOW') for m in cve_matches}
     if ('CONFIRMED' in cve_confs or 'HIGH' in cve_confs) and score < 50:
         score = 50
+
+    pm = result.get('pattern_matches', {}) or {}
+    pm_conf = pm.get('confidence')
+    has_high_pattern = pm_conf == 'HIGH'
+    open_dispatch = _is_open_dispatch(result)
+    if pm_conf == 'MEDIUM':
+        score += 10
+    elif pm_conf == 'LOW':
+        score += 5
+    verdict_reasons = result.setdefault('verdict_reasons', [])
+    if has_high_pattern and open_dispatch and not ms_inbox_signed:
+        if score < 70:
+            score = 70
+        if 'PATTERN_HIGH+OPEN_DISPATCH' not in verdict_reasons:
+            verdict_reasons.append('PATTERN_HIGH+OPEN_DISPATCH')
 
     score = max(0, min(score, cap))
     if score >= 90:   tier = 'PERFECT'
@@ -4769,12 +4979,39 @@ def quick_scan(driver_path: str, offline: bool = False) -> dict:
     }
 
 def full_scan(driver_path: str, depth: int, no_flirt: bool, deep: bool, no_decompile: bool,
-              verify_load: bool, offline: bool = False) -> dict:
-    r = _ida_scan(driver_path, depth=depth, no_flirt=no_flirt, deep=deep, no_decompile=no_decompile)
+              verify_load: bool, offline: bool = False,
+              pattern_dir: Optional[str] = None, do_patterns: bool = True,
+              patterns_only: bool = False) -> dict:
     buf = _read_pe_bundle(driver_path)
+    pe_ext = pe_extended_info_from_buf(buf) if buf else {'error': 'open'}
+    pm_result = None
+    if do_patterns:
+        imps = _imports_set_from_pe_extended(pe_ext)
+        pm_result = match_primitive_patterns(driver_path, pattern_dir=pattern_dir,
+                                             imports=imps, strings=None)
+    if patterns_only:
+        r = {
+            'driver': driver_path,
+            'pe_extended': pe_ext,
+            'pattern_matches': pm_result or {},
+            'modes_resolved': [], 'ioctls': [], 'ioctl_count': 0,
+            'primitives': [], 'gates_detected': [],
+            'imports': sorted(_imports_set_from_pe_extended(pe_ext)),
+            'analyze_time_s': 0.0,
+        }
+        r['hvci'] = hvci_flags_from_buf(buf) if buf else {'error': 'open'}
+        r['hashes'] = file_hashes_from_buf(buf) if buf else {'error': 'open'}
+        sig = {} if offline else signing_info(driver_path)
+        burnt, why = is_burnt(sig)
+        sig['burnt_status'] = f'BURNT ({why})' if burnt else 'clean'
+        r['signing'] = sig
+        return r
+    r = _ida_scan(driver_path, depth=depth, no_flirt=no_flirt, deep=deep, no_decompile=no_decompile)
     r['hvci'] = hvci_flags_from_buf(buf) if buf else {'error': 'open'}
     r['hashes'] = file_hashes_from_buf(buf) if buf else {'error': 'open'}
-    r['pe_extended'] = pe_extended_info_from_buf(buf) if buf else {'error': 'open'}
+    r['pe_extended'] = pe_ext
+    if pm_result is not None:
+        r['pattern_matches'] = pm_result
     sig = {} if offline else signing_info(driver_path)
     burnt, why = is_burnt(sig)
     sig['burnt_status'] = f'BURNT ({why})' if burnt else 'clean'
@@ -5252,7 +5489,7 @@ def _csv_dump(results: list) -> str:
     return out.getvalue()
 
 
-VERSION = 'v2.10.24'
+VERSION = 'v2.11.0'
 
 USAGE_EPILOG = r"""
 =========================================================================
@@ -5467,6 +5704,12 @@ def main():
                         help='[single|sweep] skip drivers > N MB (default 1.5)')
     tuning.add_argument('--filter', choices=['perfect', 'partial', 'any'], default='any',
                         help='[sweep-only] only show drivers >= tier')
+    tuning.add_argument('--patterns', metavar='DIR', default=DEFAULT_PATTERN_DIR,
+                        help=f'[single|sweep] directory of *.json byte-pattern files (default: {DEFAULT_PATTERN_DIR})')
+    tuning.add_argument('--no-patterns', action='store_true',
+                        help='[single|sweep] skip pre-flight pattern-matching engine entirely')
+    tuning.add_argument('--patterns-only', action='store_true',
+                        help='[single|sweep] run only the pattern matcher (no IDA dispatcher walk)')
     output = p.add_argument_group('Output')
     output.add_argument('--output', choices=['table', 'json', 'markdown', 'csv'], default='table',
                         help='output format (default: table)')
@@ -5643,7 +5886,10 @@ def main():
             else:
                 r = full_scan(str(d), args.depth, False, args.deep,
                               False, args.verify_load,
-                              offline=args.offline_mode)
+                              offline=args.offline_mode,
+                              pattern_dir=args.patterns,
+                              do_patterns=not args.no_patterns,
+                              patterns_only=args.patterns_only)
             r['path'] = str(d)
             r['cve_matches'] = match_cves(r)
             sc, tr = perfect_score(r)
@@ -5766,7 +6012,10 @@ def main():
                 else:
                     r = full_scan(str(b), args.depth, False,
                                   args.deep, False, args.verify_load,
-                                  offline=args.offline_mode)
+                                  offline=args.offline_mode,
+                                  pattern_dir=args.patterns,
+                                  do_patterns=not args.no_patterns,
+                                  patterns_only=args.patterns_only)
                 r['path'] = str(b)
                 r['cve_matches'] = match_cves(r)
                 sc, tr = perfect_score(r)
@@ -5889,7 +6138,10 @@ def main():
         r = quick_scan(str(drv), offline=args.offline_mode)
     else:
         r = full_scan(str(drv), args.depth, False, args.deep, False,
-                      args.verify_load, offline=args.offline_mode)
+                      args.verify_load, offline=args.offline_mode,
+                      pattern_dir=args.patterns,
+                      do_patterns=not args.no_patterns,
+                      patterns_only=args.patterns_only)
     r['path'] = str(drv)
     r['cve_matches'] = match_cves(r)
     sc, tr = perfect_score(r)

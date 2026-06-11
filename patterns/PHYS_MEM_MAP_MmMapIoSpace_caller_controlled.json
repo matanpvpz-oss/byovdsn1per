@@ -1,0 +1,59 @@
+{
+  "name": "PHYS_MEM_MAP_MmMapIoSpace_caller_controlled",
+  "primitive": "PHYS_MEM_MAP",
+  "confidence": "HIGH",
+  "min_arch": "x64",
+  "byte_sequences": [
+    {
+      "hex": "45 33 C0 48 8B ?? ?? ?? FF 15",
+      "min_occurrences": 1
+    },
+    {
+      "hex": "FF 15 ?? ?? ?? ?? 4C 8B ?? 49 3B C4",
+      "min_occurrences": 1
+    },
+    {
+      "hex": "FF 15 ?? ?? ?? ?? 48 8B ?? 49 3B C5",
+      "min_occurrences": 1
+    },
+    {
+      "hex": "FF 15 ?? ?? ?? ?? 48 85 C0 74 ?? 48 89",
+      "min_occurrences": 1
+    },
+    {
+      "hex": "FF 15 ?? ?? ?? ?? 4C 8B ?? 48 85 C0 74",
+      "min_occurrences": 1
+    }
+  ],
+  "import_required": ["MmMapIoSpace"],
+  "import_forbidden": [],
+  "negative_strings": [
+    "Scsi",
+    "SCSI",
+    "RAID",
+    "Raid",
+    "StorPort",
+    "StorageDevice",
+    "iaStor",
+    "AHCI",
+    "Ahci",
+    "VMCI",
+    "vmci",
+    "VMware",
+    "HBA",
+    "CDB",
+    "StorPortInitialize",
+    "ScsiPortInitialize"
+  ],
+  "positive_strings": [
+    "\\Device\\PhysicalMemory",
+    "MmAllocateContiguousMemorySpecifyCache",
+    "ASRock IO Driver",
+    "AsrDrv"
+  ],
+  "reference_drivers": [
+    "RTCore64.sys (sha256 anchored, MSI Afterburner CVE-2019-16098 family)",
+    "AsrDrv10.sys (ASRock IO Driver, CVE-2020-15368 family)"
+  ],
+  "notes": "Detects MmMapIoSpace use with caller-controlled PhysicalAddress/Length where the returned mapped VA is NULL-checked and stored back to a struct/output buffer (the classic BYOVD physmem-mapper pattern). Sequence (1) catches xor r8d,r8d (CacheType=MmNonCached=0) immediately before the indirect IAT call. Sequences (2)-(5) catch post-call mov-rax-to-saved-reg + NULL-check + store, the canonical idiom whose presence + a positive_strings hit on '\\Device\\PhysicalMemory' or 'Physical Memory' distinguishes weaponizable BYOVD physmem mappers from legitimate storage / chipset drivers (iaStorAC, iaStorV, nvraid, vmci, ApsX64 — all match the post-call idiom but lack the PhysicalMemory string and so are filtered). RTCore64 TP=2 (1 pre + 1 post). AsrDrv10 TP=4 (3 post variants across 4 dispatcher branches). HIGH confidence is contingent on positive_strings match; without it the matcher should downgrade to MEDIUM per engine semantics. The patterns are MSVC-x64 canonical; Clang and GCC kernel toolchains may emit slightly different register selections — re-evaluate on Clang-built drivers (rare in BYOVD corpus)."
+}

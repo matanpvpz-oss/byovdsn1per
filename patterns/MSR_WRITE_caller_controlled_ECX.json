@@ -1,0 +1,64 @@
+{
+  "name": "MSR_WRITE_caller_controlled_ECX",
+  "primitive": "MSR_WRITE",
+  "confidence": "HIGH",
+  "min_arch": "x64",
+  "byte_sequences": [
+    {"hex": "41 8B 08 0F 30", "min_occurrences": 1},
+    {"hex": "41 8B 09 0F 30", "min_occurrences": 1},
+    {"hex": "41 8B 0A 0F 30", "min_occurrences": 1},
+    {"hex": "41 8B 0B 0F 30", "min_occurrences": 1},
+    {"hex": "41 8B 0E 0F 30", "min_occurrences": 1},
+    {"hex": "41 8B 0F 0F 30", "min_occurrences": 1},
+    {"hex": "41 8B 48 ?? 0F 30", "min_occurrences": 1},
+    {"hex": "41 8B 49 ?? 0F 30", "min_occurrences": 1},
+    {"hex": "41 8B 4A ?? 0F 30", "min_occurrences": 1},
+    {"hex": "41 8B 4B ?? 0F 30", "min_occurrences": 1},
+    {"hex": "41 8B 4D ?? 0F 30", "min_occurrences": 1},
+    {"hex": "41 8B 4E ?? 0F 30", "min_occurrences": 1},
+    {"hex": "41 8B 4F ?? 0F 30", "min_occurrences": 1},
+    {"hex": "8B 08 0F 30", "min_occurrences": 1},
+    {"hex": "8B 09 0F 30", "min_occurrences": 1},
+    {"hex": "8B 0A 0F 30", "min_occurrences": 1},
+    {"hex": "8B 0B 0F 30", "min_occurrences": 1},
+    {"hex": "8B 0E 0F 30", "min_occurrences": 1},
+    {"hex": "8B 0F 0F 30", "min_occurrences": 1},
+    {"hex": "8B 48 ?? 0F 30", "min_occurrences": 1},
+    {"hex": "8B 49 ?? 0F 30", "min_occurrences": 1},
+    {"hex": "8B 4A ?? 0F 30", "min_occurrences": 1},
+    {"hex": "8B 4B ?? 0F 30", "min_occurrences": 1},
+    {"hex": "8B 4D ?? 0F 30", "min_occurrences": 1},
+    {"hex": "8B 4E ?? 0F 30", "min_occurrences": 1},
+    {"hex": "8B 4F ?? 0F 30", "min_occurrences": 1}
+  ],
+  "import_required": [],
+  "import_forbidden": [
+    "HalSendNMI",
+    "KeRegisterBugCheckCallback"
+  ],
+  "negative_strings": [
+    "intelppm",
+    "amdppm",
+    "Processor Power Management",
+    "PPM_PERF_STATE",
+    "ACPI_PROCESSOR",
+    "IntelSpeedStep",
+    "EnhancedSpeedStep",
+    "Cstate"
+  ],
+  "positive_strings": [
+    "MSR",
+    "Msr",
+    "WriteMsr",
+    "WrMsr",
+    "writemsr",
+    "\\Device\\RTCore",
+    "RTCore",
+    "CPUID"
+  ],
+  "reference_drivers": [
+    "RTCore64.sys (MSI Afterburner / CVE-2019-16098, sha256 anchored)",
+    "cpuz-1.0.4.1.sys (CPUID CPU-Z driver, CVE-2017-15303 family)"
+  ],
+  "notes": "Detects the canonical MSVC x64 lowering of __writemsr() where ECX (MSR index) is loaded from a MEMORY operand (mod=00 with no SIB or mod=01 with disp8) rather than from an IMM32 literal or a register. Each sequence pins (a) optional REX 0x41 (B-bit set, addressing r8..r15), (b) opcode 0x8B (mov r32, r/m32), (c) a specific ModR/M byte where the reg field = 001 (ECX) and mod = 00 or 01 with rm field selecting a memory base register, (d) the disp8 byte where present, and (e) wrmsr 0x0F 0x30. The ModR/M-mask design DELIBERATELY EXCLUDES (i) mod=11 register-register bytes 0xC8-0xCF, which is why legitimate drivers like intelppm.sys / amdppm.sys / processr.sys / intelpep.sys (which load ECX from another register or via xchg) do not match, and (ii) the SIB-escape byte 0x0c and disp32-escape byte 0x0d under mod=00, because legitimate per-CPU MSR access tables typically index via SIB or RIP-relative addressing. RTCore64 hit at text+0x8a1 (41 8B 0A = mov ecx,[r10]; wrmsr — r10 carries the SystemBuffer pointer from CVE-2019-16098 IOCTL 0x80002030). cpuz hit at text+0x6bc (41 8B 4D 00 = mov ecx,[r13+0]; wrmsr — r13 carries the SystemBuffer pointer from the CVE-2017-15303 IOCTL 0x9C402444). Test results: cpuz=2 TP, RTCore64=1 TP, intelppm=0 FP across 44 wrmsr instructions, amdppm=0 FP across 14 wrmsr, processr=0 FP across 10 wrmsr, intelpep=0 FP, plus 0 FP across 11 non-MSR Windows drivers totaling ~6.6 MB .text (tcpip, ntfs, storport, http, mup, fastfat, disk, cdfs, null, beep, hvservice). The import_forbidden HalSendNMI / KeRegisterBugCheckCallback guards against future MSR-batching power/telemetry drivers; negative_strings catch intelppm / amdppm / processr by name. positive_strings 'MSR' / 'RTCore' raise confidence when present but are not required since the byte-level filter is already tight."
+}
