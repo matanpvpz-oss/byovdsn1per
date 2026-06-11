@@ -1,0 +1,62 @@
+{
+  "name": "PHYS_MEM_MAP_PORT_IO_Dell_DBUtilDrv2_shape",
+  "primitive": "PHYS_MEM_MAP",
+  "confidence": "HIGH",
+  "min_arch": "x64",
+  "byte_sequences": [
+    {
+      "hex": "45 33 C0 48 8B D5 48 8B C8 FF 15 ?? ?? ?? ?? 48 85 C0 75 ?? B8 ?? ?? ?? C0",
+      "min_occurrences": 1
+    },
+    {
+      "hex": "48 8B D5 48 8B C8 FF 15 ?? ?? ?? ?? 48 8B 13 33 C0 F3 0F 7F 32",
+      "min_occurrences": 1
+    },
+    {
+      "hex": "50 53 51 52 57 56 55 48 8B E9 E8 ?? ?? ?? ?? 55",
+      "min_occurrences": 2
+    },
+    {
+      "hex": "E4 81 E6 81",
+      "min_occurrences": 2
+    }
+  ],
+  "import_required": [
+    "MmMapIoSpace",
+    "MmUnmapIoSpace",
+    "MmGetPhysicalAddress",
+    "MmAllocateContiguousMemorySpecifyCache",
+    "KeInsertQueueDpc"
+  ],
+  "import_forbidden": [
+    "IoCreateDeviceSecure",
+    "ProbeForRead",
+    "ProbeForWrite",
+    "ExGetPreviousMode",
+    "SeAccessCheck",
+    "SeSinglePrivilegeCheck",
+    "SePrivilegeCheck",
+    "WdfDriverCreate",
+    "FltRegisterFilter"
+  ],
+  "negative_strings": [
+    "D:P(",
+    "SDDL",
+    "PreviousMode",
+    "SeAccessCheck",
+    "ProbeForRead",
+    "ProbeForWrite",
+    "StorPortInitialize",
+    "ScsiPortInitialize"
+  ],
+  "positive_strings": [
+    "DBUtil",
+    "DBUtilDrv2",
+    "MmMapIoSpace",
+    "MmAllocateContiguousMemorySpecifyCache"
+  ],
+  "reference_drivers": [
+    "dbutil_2_3.sys (Dell DBUtilDrv2_64, CVE-2021-21551 family)"
+  ],
+  "notes": "Detects the Dell DBUtilDrv2 / dbutil_2_3 BYOVD primitive shape: arbitrary phys-mem map via MmMapIoSpace + arbitrary port-IO via DPC-deferred __outbyte/__outword/__outdword. Sequence (1) is the MmMapIoSpace caller-controlled prelude (xor r8d,r8d CacheType=MmNonCached, mov rdx,rbp Length, mov rcx,rax PhysAddr, IAT-call, NULL-check, fallthrough to mov eax,0xCxxxxxxx NTSTATUS — wildcarded to cover both 0xC00000A0 STATUS_INSUFFICIENT_RESOURCES and sibling 0xCxxxxxxx error tails seen across the family). Sequence (2) is the MmUnmapIoSpace tail with the SSE2 zeroing pattern (movdqu xmm6,[rdx]) used to scrub the mapping descriptor on close. Sequence (3) is the canonical DPC port-IO worker prologue (push 7x regs + mov rbp,rcx + call shared-fence), occurring at all four __outdword/__outword/__outbyte/SMI-trigger DPC entry points — min 2 hits filters single-worker drivers. Sequence (4) is the SMI / APM IO-port fence (in al,0x81 ; out 0x81,al — DMA page register read-modify-write used here as a serializing barrier around the OUT to port 0xB2). The import_required quintet pins the BYOVD phys-mem + DPC-port-IO architecture; the import_forbidden gate rejects any properly hardened driver that uses ProbeForRead/Write, SeAccessCheck, SePrivilegeCheck, ExGetPreviousMode, or IoCreateDeviceSecure. negative_strings reject drivers carrying SDDL ACL strings ('D:P(' / 'SDDL'), explicit PreviousMode/AccessCheck handling, or storage-port markers (StorPort/ScsiPort) which match the phys-mem shape but are not weaponizable. positive_strings DBUtil / DBUtilDrv2 confirm the specific Dell-DBUtil lineage when present; MmMapIoSpace / MmAllocateContiguousMemorySpecifyCache strings cover the broader sibling family. Reference: dbutil_2_3.sys at mj14=0x11170, device_type=0x9b0c, 15 IOCTLs in switch routed off LowPart of Parameters.Read.ByteOffset; MmMapIoSpace gate at ioctl 0x9b0c1f40 sub_15100, port-IO at 0x9b0c1f80..8C / 0x9b0c1fc0..c4 sub_15008, DPC SMI/OUT workers sub_116EC/sub_1167F/sub_11657/sub_11630; trivial pointer-equality gate (input_buf[+0x10] == SystemBuffer ptr). Public CVE writeups conflate DBUtil with MSR-R/W; the 0F 30 / 0F 32 opcodes are absent from this binary — primitive class is PHYS_MEM_MAP + PORT_IO, not MSR_ACCESS."
+}

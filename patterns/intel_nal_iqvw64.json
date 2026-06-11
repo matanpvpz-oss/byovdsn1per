@@ -1,0 +1,44 @@
+{
+  "name": "PHYS_MEM_MAP_Intel_Nal_iQVW64_shape",
+  "primitive": "PHYS_MEM_MAP",
+  "confidence": "HIGH",
+  "min_arch": "x64",
+  "byte_sequences": [
+    {
+      "hex": "48 89 5C 24 30 BB 04 80 6A C8 85 C0 74 ?? 48 8B D0 45 33 C0 48 8B ?? FF 15",
+      "min_occurrences": 1
+    },
+    {
+      "hex": "81 ?? 13 20 86 80",
+      "min_occurrences": 1
+    },
+    {
+      "hex": "81 ?? 07 20 86 80",
+      "min_occurrences": 1
+    }
+  ],
+  "import_required": [
+    "MmMapIoSpace",
+    "MmGetPhysicalAddress",
+    "MmUnmapIoSpace"
+  ],
+  "import_forbidden": [
+    "IoCreateDeviceSecure",
+    "ProbeForRead",
+    "ProbeForWrite",
+    "SeAccessCheck",
+    "SeSinglePrivilegeCheck",
+    "FltRegisterFilter",
+    "WdfDriverCreate"
+  ],
+  "negative_strings": [
+    "WUDF",
+    "BitLocker",
+    "fvevol",
+    "AppId Helper"
+  ],
+  "reference_drivers": [
+    "iQVW64.SYS"
+  ],
+  "notes": "Intel Nal family PHYS_MEM_MAP fingerprint: MmMapIoSpace called with CacheType=MmNonCached via prologue 'mov [rsp+30h],rbx; mov ebx,0xC86A8004; test eax,eax; jz; mov rdx,rax; xor r8d,r8d; mov rcx,reg; call cs:MmMapIoSpace'. Sequences 2-3 anchor on device-type 0x8086 IOCTL DWORDs (0x80862013, 0x80862007) via 'cmp r32, imm32' or 'sub r32, imm32' little-endian encoding. Import triad MmMapIoSpace+MmGetPhysicalAddress+MmUnmapIoSpace gates the family. Reference: iQVW64.SYS, 2 MmMapIoSpace call hits + 2 IOCTL anchors = 4 occurrences self-test."
+}

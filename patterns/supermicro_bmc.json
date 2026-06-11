@@ -1,0 +1,70 @@
+{
+  "name": "PHYS_MEM_MAP_ZwSection_NtCurrentProcess_SuperBMC_shape",
+  "primitive": "PHYS_MEM_MAP",
+  "confidence": "HIGH",
+  "min_arch": "x64",
+  "byte_sequences": [
+    {
+      "hex": "48 C7 C2 FF FF FF FF 48 8B 8C 24 ?? ?? 00 00 FF 15",
+      "min_occurrences": 1
+    },
+    {
+      "hex": "FF 15 ?? ?? 00 00 89 84 24 FC 00 00 00 83 BC 24 FC 00 00 00 00 7D",
+      "min_occurrences": 1
+    },
+    {
+      "hex": "45 33 C9 45 33 C0 33 D2 48 8B 4C 24 ?? 48 8B 49 ?? FF 15",
+      "min_occurrences": 1
+    },
+    {
+      "hex": "8B 94 24 ?? ?? 00 00 8B 8C 24 ?? ?? 00 00 FF 15",
+      "min_occurrences": 1
+    },
+    {
+      "hex": "BA 1F 00 0F 00",
+      "min_occurrences": 1
+    }
+  ],
+  "import_required": [
+    "ZwOpenSection",
+    "ZwMapViewOfSection",
+    "ZwUnmapViewOfSection",
+    "ObReferenceObjectByHandle",
+    "HalTranslateBusAddress",
+    "IoCreateDevice"
+  ],
+  "import_forbidden": [
+    "IoCreateDeviceSecure",
+    "ProbeForRead",
+    "ProbeForWrite",
+    "ExGetPreviousMode",
+    "SeAccessCheck",
+    "SeSinglePrivilegeCheck",
+    "MmMapIoSpace",
+    "MmMapIoSpaceEx",
+    "MmGetPhysicalAddress",
+    "FltRegisterFilter",
+    "WdfDriverCreate"
+  ],
+  "negative_strings": [
+    "D:P(",
+    "SDDL",
+    "PreviousMode",
+    "SeAccessCheck",
+    "ProbeForRead",
+    "ProbeForWrite",
+    "StorPortInitialize",
+    "ScsiPortInitialize",
+    "WUDF",
+    "BitLocker",
+    "fvevol"
+  ],
+  "positive_strings": [
+    "\\Device\\PhysicalMemory",
+    "PhysicalMemory"
+  ],
+  "reference_drivers": [
+    "superbmc.sys"
+  ],
+  "notes": "PHYS_MEM_MAP via the ZwOpenSection(\\Device\\PhysicalMemory, SECTION_ALL_ACCESS=0x000F001F) + ObReferenceObjectByHandle + ZwMapViewOfSection(ProcessHandle=-1=NtCurrentProcess) primitive shape, the Cuckoo/Cerrudo PhysicalMemory-into-user-space pattern. Sequence (1) is the distinguishing fingerprint: 'mov rdx, 0xFFFFFFFFFFFFFFFF (NtCurrentProcess); mov rcx, [SectionHandle on stack]; call cs:ZwMapViewOfSection' — rdx=-1 as the ProcessHandle argument to ZwMapViewOfSection maps physical memory directly into the caller's user-mode address space. Sequence (2) is the post-call NTSTATUS check 'call [imp_X]; mov [rsp+FC],eax; cmp dword [rsp+FC],0; jge' wrapping each Zw* call — a strong cluster anchor in this driver family. Sequence (3) is the HANDLE_DUP-shape ObReferenceObjectByHandle with wildcard DesiredAccess=0 ('xor r9d,r9d (KernelMode); xor r8d,r8d (ObjectType=any); xor edx,edx (DesiredAccess=0); mov rcx,[Handle]; call'). Sequence (4) is the caller-controlled HalTranslateBusAddress prologue 'mov edx,[user_BusNumber]; mov ecx,[user_InterfaceType]; ...; call' — BUS_ADDR_TRANSLATE primitive anchor. Sequence (5) is the SECTION_ALL_ACCESS=0x000F001F immediate 'mov edx, 1Fh000Fh' that precedes the ZwOpenSection call on PhysicalMemory. Import gate requires the ZwSection+ObRef+HalTransBus+IoCreateDevice (non-secure) sextet and forbids MmMapIoSpace family (this driver explicitly avoids the more common physmem-mapping route, which is the distinguishing fingerprint vs RTCore64/cpuz/AsrDrv shapes), as well as standard hardening imports (ProbeForRead/Write, SeAccessCheck, SePrivilegeCheck, ExGetPreviousMode, IoCreateDeviceSecure) and Wdf/Flt frameworks. Reference: superbmc.sys (Super Micro BMC management) at mj14=0x12ea0, device_type=0x8010, 6 IOCTLs (0x80102208/0x20/0x38/0x40/0x48/0x60), open-gate; PhysMem map at site 0x14cf3 via IOCTL 0x80102220 path, twin HalTranslateBusAddress calls at 0x14bb5/0x14be7 via IOCTL 0x80102238 path, HANDLE_DUP-shape ObRefByHandle at 0x12cb8 in the create-context path. Self-test on reference: seq1=1, seq2=3, seq3=2, seq4=2, seq5=2 (10 total occurrences). The ZwSection-PhysMem path is rarely seen in BYOVD corpus — most weaponizable physmem mappers use MmMapIoSpace, making this Zw-path family small but distinctive."
+}

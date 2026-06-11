@@ -1426,7 +1426,8 @@ PRIMITIVE_CLASSES = {
                          "MmMapLockedPagesSpecifyCache", "MmGetPhysicalAddress",
                          "ZwOpenSection", "ZwMapViewOfSection"},
     "MDL_PRIMITIVE":    {"MmProbeAndLockPages", "IoAllocateMdl", "MmMapLockedPages"},
-    "PROCESS_KILL":     {"ZwTerminateProcess", "PsTerminateSystemThread"},
+    "PROCESS_KILL":     {"PsLookupProcessByProcessId", "ZwTerminateProcess", "NtTerminateProcess"},
+    "THREAD_KILL":      {"PsTerminateSystemThread", "PsTerminateThread"},
     "TOKEN_STEAL":      {"PsLookupProcessByProcessId", "ObOpenObjectByPointer"},
     "CALLBACK_REG":     {"PsSetCreateProcessNotifyRoutine", "PsSetCreateProcessNotifyRoutineEx",
                          "PsSetCreateThreadNotifyRoutine", "PsSetLoadImageNotifyRoutine",
@@ -5489,7 +5490,7 @@ def _csv_dump(results: list) -> str:
     return out.getvalue()
 
 
-VERSION = 'v2.11.0'
+VERSION = 'v2.12.0'
 
 USAGE_EPILOG = r"""
 =========================================================================

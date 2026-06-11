@@ -1,0 +1,59 @@
+{
+  "name": "PHYS_MEM_MAP_Gigabyte_gdrv_MOAD_shape",
+  "primitive": "PHYS_MEM_MAP",
+  "confidence": "HIGH",
+  "min_arch": "x64",
+  "byte_sequences": [
+    {
+      "hex": "45 33 C0 48 8B D5 FF 15",
+      "min_occurrences": 1
+    },
+    {
+      "hex": "45 33 C0 8B 57 14 48 8B 4F 08 FF 15",
+      "min_occurrences": 1
+    },
+    {
+      "hex": "41 8B D4 8B CD 48 89 44 24 ?? 48 8D 44 24 ?? 48 89 44 24 20 FF 15",
+      "min_occurrences": 1
+    },
+    {
+      "hex": "48 8B CF FF 15 ?? ?? ?? ?? 48 8D 0D",
+      "min_occurrences": 1
+    }
+  ],
+  "import_required": [
+    "MmMapIoSpace",
+    "HalTranslateBusAddress",
+    "MmGetPhysicalAddress",
+    "ZwOpenSection",
+    "ZwMapViewOfSection"
+  ],
+  "import_forbidden": [
+    "IoCreateDeviceSecure",
+    "WdmlibIoCreateDeviceSecure",
+    "ProbeForRead",
+    "ProbeForWrite",
+    "ExGetPreviousMode",
+    "SeAccessCheck",
+    "SeSinglePrivilegeCheck",
+    "RtlCheckTokenMembershipEx",
+    "FltRegisterFilter",
+    "WdfDriverCreate"
+  ],
+  "negative_strings": [
+    "WUDF",
+    "BitLocker",
+    "fvevol",
+    "AppId Helper",
+    "StorPortInitialize",
+    "ScsiPortInitialize"
+  ],
+  "positive_strings": [
+    "\\Device\\PhysicalMemory",
+    "MAPMEM"
+  ],
+  "reference_drivers": [
+    "gdrv.sys (Gigabyte CVE-2018-19320 MOAD family)"
+  ],
+  "notes": "Gigabyte gdrv.sys (MOAD, CVE-2018-19320) PHYS_MEM_MAP cluster: device_type 0xC350 dispatcher chains MmMapIoSpace (caller-controlled PA/length, MmNonCached forced) + HalTranslateBusAddress (5-arg lowering via [rsp+20h] TranslatedAddress) + ZwOpenSection(\\Device\\PhysicalMemory) + ZwMapViewOfSection + MmGetPhysicalAddress in a single MJ14 handler with ZERO gates (no IoCreateDeviceSecure, no SDDL, no ExGetPreviousMode, no ProbeForRead/Write, no SE_*_PRIVILEGE, no magic cookie). Sequence 1 catches inline MJ14 MmMapIoSpace lowering (xor r8d,r8d ; mov rdx,rbp ; call cs:imp). Sequence 2 catches the sub_11570 wrapper variant (mov edx,[rdi+14h] length, mov rcx,[rdi+8] PA, xor r8d,r8d). Sequence 3 catches HalTranslateBusAddress 5-arg lowering (mov edx,r12d BusNumber, mov ecx,ebp InterfaceType, mov [rsp+20h],rax TranslatedAddress). Sequence 4 catches MmGetPhysicalAddress(rdi=BaseAddress) followed by DbgPrint lea. Reference driver self-test on gdrv.sys: 5 byte-pattern hits across 4 sequences, both positive_strings present, all 5 import_required present, zero import_forbidden, zero negative_strings."
+}
