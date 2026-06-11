@@ -22,7 +22,7 @@ Also: `--diff` for side-by-side comparison of two drivers, `--strings` with rege
 powershell -ExecutionPolicy Bypass -File install.ps1
 ```
 
-Copies the script to `%LOCALAPPDATA%\Programs\BYOVDsn1per\` and adds it to your user PATH. No admin needed. Open a new terminal and `byovdsn1per --version` should print v2.18.
+Copies the script to `%LOCALAPPDATA%\Programs\BYOVDsn1per\` and adds it to your user PATH. No admin needed. Open a new terminal and `byovdsn1per --version` should print v2.19.
 
 After install, run `byovdsn1per --doctor` to confirm Python, idalib, pefile, the Windows signing tools, **and the user PATH entry** are all in place. It also shows where the default crawl output dir resolves on your machine.
 
@@ -31,7 +31,9 @@ After install, run `byovdsn1per --doctor` to confirm Python, idalib, pefile, the
 Two commands rebuild a broken or partial install without touching `install.ps1`:
 
 - `byovdsn1per --doctor --fix` — maximum repair. Redeploys every install artifact that's missing or stale (main script, `.cmd` launcher, lowercase alias, README), **adds the install dir to your user PATH** (Windows, via `HKCU\Environment` + a settings broadcast), pip-installs `pefile` if it's missing, creates the crawler/results dirs, and prunes stale `__pycache__` and dead sha256-cache entries. Idempotent; safe to re-run.
-- `byovdsn1per --update` (alias `--upgrade`) — the same full repair, focused on the install: redeploy stale/missing artifacts, ensure the PATH entry, pre-create the crawler dir, and install `pefile`. This is `install.ps1` minus the admin-y bits, runnable from a plain shell.
+- `byovdsn1per --update` (alias `--upgrade`) — **self-update**: first fetches the latest code (`git pull` when run from a clone — works with private repos via your own credentials — otherwise downloads `BYOVDsn1per.py` from GitHub), then does the same full repair: redeploy artifacts, ensure the PATH entry, pre-create the crawler dir, install `pefile`. Runnable from a plain shell.
+
+> First upgrade only: a freshly-installed older copy has the *old* `--update` (which couldn't fetch anything), so the very first jump to a new version has to come from `git pull` + `install.ps1` in a clone. After you're on a build with self-update, `byovdsn1per --update` keeps you current on its own.
 
 Both report a per-item checklist and exit non-zero if anything couldn't be repaired (e.g. a permission-denied copy, or `pip` blocked by your network policy).
 

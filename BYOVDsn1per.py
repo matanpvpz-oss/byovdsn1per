@@ -5405,6 +5405,84 @@ def _prune_sha256_cache(out_path: Path):
     return (removed, len(keep))
 
 
+GITHUB_REPO = 'matanpvpz-oss/byovdsn1per'
+GITHUB_RAW = f'https://raw.githubusercontent.com/{GITHUB_REPO}/main/BYOVDsn1per.py'
+
+
+def _find_git_worktree(start_dir: str):
+    """Return the nearest ancestor of start_dir that is a git work-tree, or None."""
+    d = start_dir
+    for _ in range(6):
+        if os.path.exists(os.path.join(d, '.git')):
+            return d
+        parent = os.path.dirname(d)
+        if parent == d:
+            break
+        d = parent
+    return None
+
+
+def _self_fetch_latest():
+    """Download the newest BYOVDsn1per.py from GitHub main. Returns (bytes, msg)
+    or (None, why). Best-effort; never raises."""
+    try:
+        import urllib.request
+        req = urllib.request.Request(GITHUB_RAW, headers={'User-Agent': 'BYOVDsn1per-update'})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = resp.read()
+        if b'BYOVDsn1per' not in data[:4000] or b'VERSION' not in data:
+            return (None, 'downloaded content does not look like BYOVDsn1per.py (private repo?)')
+        return (data, 'ok')
+    except Exception as e:
+        return (None, f'{type(e).__name__}: {e}')
+
+
+def _self_update_source(source_path: str, source_dir: str):
+    """Refresh the on-disk source to the latest published code so --update truly
+    updates. Prefers `git pull` when run from a clone (handles private repos via
+    your own credentials); otherwise downloads from GitHub. Returns a list of
+    (kind, message) tuples. Never raises."""
+    msgs = []
+    repo = _find_git_worktree(source_dir)
+    if repo:
+        try:
+            r = subprocess.run(['git', '-C', repo, 'pull', '--ff-only'],
+                               capture_output=True, text=True, timeout=120)
+            out = (r.stdout or '').strip()
+            err = (r.stderr or '').strip()
+            if r.returncode == 0:
+                last = out.splitlines()[-1] if out else 'up to date'
+                msgs.append(('ok', f'git pull ({repo}): {last}'))
+            else:
+                msgs.append(('warn', f'git pull failed: {(err or out).splitlines()[-1] if (err or out) else r.returncode}'))
+                msgs.append(('hint', 'fix the clone by hand, or run install.ps1 from it'))
+        except Exception as e:
+            msgs.append(('warn', f'git pull error: {e}'))
+        return msgs
+
+    # Not in a clone (e.g. the installed copy): pull the file over the network.
+    data, why = _self_fetch_latest()
+    if data is None:
+        msgs.append(('warn', f'could not fetch update ({why})'))
+        msgs.append(('hint', 'manual: git clone https://github.com/' + GITHUB_REPO
+                     + ' && cd byovdsn1per && powershell -ExecutionPolicy Bypass -File install.ps1'))
+        return msgs
+    try:
+        import re as _re
+        m = _re.search(rb"VERSION = '(v[0-9][0-9.]*)'", data)
+        new_ver = m.group(1).decode() if m else '?'
+        if _sha256_file(source_path) and hashlib.sha256(data).hexdigest() == _sha256_file(source_path):
+            msgs.append(('ok', f'already latest ({new_ver})'))
+        else:
+            with open(source_path, 'wb') as f:
+                f.write(data)
+            msgs.append(('ok', f'downloaded {new_ver} -> {source_path}'))
+            msgs.append(('info', 're-run your byovdsn1per command to use the new version'))
+    except OSError as e:
+        msgs.append(('warn', f'could not write update to {source_path}: {e}'))
+    return msgs
+
+
 def _update() -> int:
     """Maximum-repair install/refresh: redeploy every artifact that is missing
     or stale, ensure the user PATH entry, pre-create the crawler dir, and make
@@ -5414,12 +5492,23 @@ def _update() -> int:
     install_dir = _install_dir()
     installed_path = os.path.join(install_dir, 'BYOVDsn1per.py')
     errors = []
-    print(f"{C.BOLD}BYOVDsn1per --update{C.RESET}  {C.DIM}(full repair){C.RESET}")
+    print(f"{C.BOLD}BYOVDsn1per --update{C.RESET}  {C.DIM}(self-update + full repair){C.RESET}")
+
+    # Step 0: actually fetch the latest published code, so --update *updates*
+    # instead of just copying the current file onto itself.
+    print(f"{C.BOLD}  Fetch latest{C.RESET}")
+    for kind, line in _self_update_source(source_path, source_dir):
+        # fetch problems are advisory -- the local repair below still runs --
+        # so they don't gate the exit code.
+        col = {'ok': C.GREEN + '+ ', 'warn': C.YELLOW + '- ',
+               'hint': C.DIM, 'info': C.DIM}.get(kind, '')
+        print(f"    {col}{line}{C.RESET}")
+
     print(f"  source:    {source_path}")
-    print(f"             {VERSION}, sha256={_sha256_file(source_path)[:16]}...")
+    print(f"             running {VERSION}, on-disk sha256={_sha256_file(source_path)[:16]}...")
     print(f"  install:   {install_dir}")
     if os.path.abspath(source_path) == os.path.abspath(installed_path):
-        print(f"  {C.YELLOW}source IS the installed binary -- verifying companions/PATH/deps only{C.RESET}")
+        print(f"  {C.DIM}source IS the installed binary -- companions/PATH/deps only{C.RESET}")
 
     print(f"{C.BOLD}  Artifacts{C.RESET}")
     actions, errs = _deploy_artifacts(source_dir, install_dir)
@@ -6012,7 +6101,7 @@ def _csv_dump(results: list) -> str:
     return out.getvalue()
 
 
-VERSION = 'v2.18.0'
+VERSION = 'v2.19.0'
 
 USAGE_EPILOG = r"""
 =========================================================================
@@ -6080,7 +6169,7 @@ ADD-ONS BY MODE -- only flags listed under a mode work with that mode
   Standalone shortcuts -- ignore DRIVER, exit immediately:
     --doctor             verify install: idalib, pefile, signtool, user PATH, paths
     --doctor --fix       MAX repair: redeploy all artifacts + user PATH + pefile + dirs + caches
-    --update / --upgrade full-repair self-update (artifacts + PATH + crawler dir + pefile)
+    --update / --upgrade self-update: fetch latest (git pull / download) + full repair
     --list               summarise the crawler dir
     --last-sweep         re-display most recent sweep JSON
     --list-sweeps        list saved sweeps + counts (pick a --resume FILE)
@@ -6211,8 +6300,9 @@ def main():
                                'add install dir to user PATH, pip-install pefile, create missing dirs, '
                                'prune stale caches/__pycache__')
     shortcut.add_argument('--update', '--upgrade', '-u', action='store_true',
-                          help='full-repair self-update: redeploy every stale/missing artifact, ensure user PATH, '
-                               'pre-create crawler dir, pip-install pefile (== install.ps1 minus admin)')
+                          help='self-update: fetch the latest code (git pull if run from a clone, else '
+                               'download from GitHub), then full repair -- redeploy artifacts, ensure user '
+                               'PATH, pre-create crawler dir, pip-install pefile')
     shortcut.add_argument('--list', '-l', action='store_true',
                           help='list what is in the crawler dir (count, size, top signers) and exit')
     shortcut.add_argument('--last-sweep', action='store_true',
