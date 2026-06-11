@@ -5806,7 +5806,7 @@ def _csv_dump(results: list) -> str:
     return out.getvalue()
 
 
-VERSION = 'v2.14.0'
+VERSION = 'v2.15.0'
 
 USAGE_EPILOG = r"""
 =========================================================================
@@ -5923,6 +5923,24 @@ EXAMPLES
     byovdsn1per --cve-list
     byovdsn1per --poc driver.sys
 
+=========================================================================
+SHORT FLAGS  (every common long flag has a one-letter alias)
+=========================================================================
+
+  Modes:    -a --all      -Q --quick     -d --deep      -s --sweep
+            -D --diff      -C --decompile -e --ea
+  Crawl:    -c --crawl     -w --deepcrawl -r --restart
+            -p --crawl-path -o --crawl-out -L --crawl-limit
+  Install:  -t --doctor    -f --fix       -u --update/--upgrade  -l --list
+  Lookups:  -H --hvci-only -g --sign-verify -X --hashes-only
+  Add-ons:  -P --poc       -S --strings   -y --yara-rule -b --burnt-check
+            -E --explain   -m --max-strings -z --offline-mode
+  Output:   -O --output    -q --quiet     -vv --verbose
+  Tuning:   -j --jobs      -F --filter    -n --no-patterns
+
+  e.g.  byovdsn1per -Qz driver.sys        (== --quick --offline-mode)
+        byovdsn1per -aF perfect -s        (== --all --filter perfect --sweep)
+
   Verbose flag reference:  byovdsn1per --help
 """
 
@@ -5937,38 +5955,38 @@ def main():
     p.add_argument('--version', '-V', action='version', version=f'BYOVDsn1per {VERSION}')
 
     mode = p.add_argument_group('Scan modes (mutually exclusive on a single driver)')
-    mode.add_argument('--all', action='store_true',
+    mode.add_argument('--all', '-a', action='store_true',
                       help='(recommended one-shot) deep scan + CVE match + strings + YARA + signtool verify')
-    mode.add_argument('--quick', action='store_true', help='HVCI + signing + PE info only (no IDA needed)')
-    mode.add_argument('--deep', action='store_true', help='full scan + per-IOCTL primitive classification')
-    mode.add_argument('--sweep', metavar='DIR', nargs='?',
+    mode.add_argument('--quick', '-Q', action='store_true', help='HVCI + signing + PE info only (no IDA needed)')
+    mode.add_argument('--deep', '-d', action='store_true', help='full scan + per-IOCTL primitive classification')
+    mode.add_argument('--sweep', '-s', metavar='DIR', nargs='?',
                       const=os.path.join(os.environ.get('APPDATA', '.'),
                                          'BYOVDsn1per', 'crawler'),
                       help='analyze every .sys in DIR. Without an argument, '
                            'defaults to %%APPDATA%%\\BYOVDsn1per\\crawler\\ '
                            '(the --crawl output dir).')
-    mode.add_argument('--diff', nargs=2, metavar=('DRV1', 'DRV2'),
+    mode.add_argument('--diff', '-D', nargs=2, metavar=('DRV1', 'DRV2'),
                       help='compare two drivers side-by-side and exit')
-    mode.add_argument('--decompile', metavar='DRIVER',
+    mode.add_argument('--decompile', '-C', metavar='DRIVER',
                       help='Hexrays-decompile one EA from DRIVER (also needs --ea)')
-    mode.add_argument('--ea', help='effective address for --decompile (e.g. 0x14000315c)')
+    mode.add_argument('--ea', '-e', help='effective address for --decompile (e.g. 0x14000315c)')
 
     crawl = p.add_argument_group('Crawl: system-wide kernel-driver discovery')
-    crawl.add_argument('--crawl', action='store_true',
+    crawl.add_argument('--crawl', '-c', action='store_true',
                        help='walk known driver paths (33 defaults: System32\\drivers, DriverStore, Program Files, vendor dirs, user paths)')
-    crawl.add_argument('--deepcrawl', action='store_true',
+    crawl.add_argument('--deepcrawl', '-w', action='store_true',
                        help='walk ENTIRE PC (every logical drive A:..Z:). Resumable via checkpoint.')
-    crawl.add_argument('--restart', action='store_true',
+    crawl.add_argument('--restart', '-r', action='store_true',
                        help='clear .scanned_paths.txt and start fresh. ALONE, implies --deepcrawl.')
-    crawl.add_argument('--crawl-path', action='append', default=[], metavar='PATH',
+    crawl.add_argument('--crawl-path', '-p', action='append', default=[], metavar='PATH',
                        help='add a crawl root path (repeatable). Combines with defaults unless --crawl-no-defaults.')
-    crawl.add_argument('--crawl-out',
+    crawl.add_argument('--crawl-out', '-o',
                        default=os.path.join(os.environ.get('APPDATA', '.'),
                                             'BYOVDsn1per', 'crawler'),
                        metavar='DIR',
                        help='output directory for crawled drivers '
                             '(default: %%APPDATA%%\\BYOVDsn1per\\crawler\\)')
-    crawl.add_argument('--crawl-limit', type=int, default=0, metavar='N',
+    crawl.add_argument('--crawl-limit', '-L', type=int, default=0, metavar='N',
                        help='stop after N unique copies (default 0 = unlimited)')
     crawl.add_argument('--crawl-no-defaults', action='store_true',
                        help='skip default Windows roots, use --crawl-path entries only')
@@ -5978,45 +5996,45 @@ def main():
                        help='print the default crawl roots and exit')
 
     shortcut = p.add_argument_group('Standalone shortcuts (single driver, no full scan)')
-    shortcut.add_argument('--doctor', action='store_true',
+    shortcut.add_argument('--doctor', '-t', action='store_true',
                           help='verify install: Python, idalib, pefile, signtool/PowerShell, user PATH, paths, crawler dir')
-    shortcut.add_argument('--fix', action='store_true',
+    shortcut.add_argument('--fix', '-f', action='store_true',
                           help='[with --doctor] MAXIMUM repair: redeploy all artifacts (script/.cmd/alias/README), '
                                'add install dir to user PATH, pip-install pefile, create missing dirs, '
                                'prune stale caches/__pycache__')
-    shortcut.add_argument('--update', '--upgrade', action='store_true',
+    shortcut.add_argument('--update', '--upgrade', '-u', action='store_true',
                           help='full-repair self-update: redeploy every stale/missing artifact, ensure user PATH, '
                                'pre-create crawler dir, pip-install pefile (== install.ps1 minus admin)')
-    shortcut.add_argument('--list', action='store_true',
+    shortcut.add_argument('--list', '-l', action='store_true',
                           help='list what is in the crawler dir (count, size, top signers) and exit')
     shortcut.add_argument('--last-sweep', action='store_true',
                           help='re-display the most recent sweep JSON without re-scanning')
     shortcut.add_argument('--show', metavar='FILE',
                           help='re-display a saved sweep JSON file (e.g. from %%APPDATA%%\\BYOVDsn1per\\)')
-    shortcut.add_argument('--hvci-only', action='store_true', help='print HVCI flag verdict and exit')
-    shortcut.add_argument('--sign-verify', action='store_true', help='run signtool /kp /v and exit')
-    shortcut.add_argument('--hashes-only', action='store_true', help='print MD5/SHA1/SHA256/imphash and exit')
+    shortcut.add_argument('--hvci-only', '-H', action='store_true', help='print HVCI flag verdict and exit')
+    shortcut.add_argument('--sign-verify', '-g', action='store_true', help='run signtool /kp /v and exit')
+    shortcut.add_argument('--hashes-only', '-X', action='store_true', help='print MD5/SHA1/SHA256/imphash and exit')
     shortcut.add_argument('--cve-list', action='store_true', help='list all CVEs in the matcher database and exit')
 
     addon = p.add_argument_group(
         'Add-ons (work with single-driver AND --sweep; --burnt-check is sweep-only)')
-    addon.add_argument('--poc', action='store_true',
+    addon.add_argument('--poc', '-P', action='store_true',
                        help='[single|sweep] CVE matcher (no exploit)')
-    addon.add_argument('--strings', action='store_true',
+    addon.add_argument('--strings', '-S', action='store_true',
                        help='[single|sweep] extract ASCII+UTF-16 strings with regex tagging')
-    addon.add_argument('--yara-rule', action='store_true',
+    addon.add_argument('--yara-rule', '-y', action='store_true',
                        help='[single|sweep] emit YARA detection rule')
     addon.add_argument('--yara-out', metavar='FILE',
                        help='[single|sweep] also write the YARA rule to FILE')
-    addon.add_argument('--max-strings', type=int, default=200,
+    addon.add_argument('--max-strings', '-m', type=int, default=200,
                        help='[single|sweep] cap top_ascii/top_utf16 size (default 200)')
-    addon.add_argument('--burnt-check', action='store_true',
+    addon.add_argument('--burnt-check', '-b', action='store_true',
                        help='[sweep-only] drop drivers signed by burnt certificates')
     addon.add_argument('--verify-load', action='store_true',
                        help='[single|sweep] run signtool /kp /v')
-    addon.add_argument('--explain', action='store_true',
+    addon.add_argument('--explain', '-E', action='store_true',
                        help='[single] signal-by-signal score breakdown')
-    addon.add_argument('--offline-mode', '--offline', action='store_true',
+    addon.add_argument('--offline-mode', '--offline', '-z', action='store_true',
                        help='[single|sweep] no subprocess (skip PowerShell/signtool); PE-only')
 
     tuning = p.add_argument_group('Tuning (single-driver or --sweep)')
@@ -6030,16 +6048,16 @@ def main():
                              'oversubscription; 1 = serial). '
                              'Full IDA sweeps always run single-threaded (idalib is '
                              'not thread-safe); applies to crawl and --quick/--patterns-only sweeps.')
-    tuning.add_argument('--filter', choices=['perfect', 'partial', 'any'], default='any',
+    tuning.add_argument('--filter', '-F', choices=['perfect', 'partial', 'any'], default='any',
                         help='[sweep-only] only show drivers >= tier')
     tuning.add_argument('--patterns', metavar='DIR', default=DEFAULT_PATTERN_DIR,
                         help=f'[single|sweep] directory of *.json byte-pattern files (default: {DEFAULT_PATTERN_DIR})')
-    tuning.add_argument('--no-patterns', action='store_true',
+    tuning.add_argument('--no-patterns', '-n', action='store_true',
                         help='[single|sweep] skip pre-flight pattern-matching engine entirely')
     tuning.add_argument('--patterns-only', action='store_true',
                         help='[single|sweep] run only the pattern matcher (no IDA dispatcher walk)')
     output = p.add_argument_group('Output')
-    output.add_argument('--output', choices=['table', 'json', 'markdown', 'csv'], default='table',
+    output.add_argument('--output', '-O', choices=['table', 'json', 'markdown', 'csv'], default='table',
                         help='output format (default: table)')
     output.add_argument('--json-out', metavar='FILE', help='also write JSON result to FILE')
     output.add_argument('--quiet', '-q', action='store_true',

@@ -22,7 +22,7 @@ Also: `--diff` for side-by-side comparison of two drivers, `--strings` with rege
 powershell -ExecutionPolicy Bypass -File install.ps1
 ```
 
-Copies the script to `%LOCALAPPDATA%\Programs\BYOVDsn1per\` and adds it to your user PATH. No admin needed. Open a new terminal and `byovdsn1per --version` should print v2.14.
+Copies the script to `%LOCALAPPDATA%\Programs\BYOVDsn1per\` and adds it to your user PATH. No admin needed. Open a new terminal and `byovdsn1per --version` should print v2.15.
 
 After install, run `byovdsn1per --doctor` to confirm Python, idalib, pefile, the Windows signing tools, **and the user PATH entry** are all in place. It also shows where the default crawl output dir resolves on your machine.
 
@@ -113,6 +113,31 @@ byovdsn1per --all driver.sys            # --deep + --poc + --strings + --yara-ru
 ```
 
 `--all` is the kitchen-sink mode. Equivalent to listing those five flags by hand.
+
+### Short flags
+
+Every common long flag has a one-letter alias, and single-letter flags bundle:
+
+```bash
+byovdsn1per -a driver.sys               # --all
+byovdsn1per -Qz driver.sys              # --quick --offline-mode
+byovdsn1per -s -F perfect -P            # --sweep --filter perfect --poc
+byovdsn1per -cw                         # --crawl --deepcrawl
+```
+
+| | | | |
+|---|---|---|---|
+| `-a` all | `-Q` quick | `-d` deep | `-s` sweep |
+| `-D` diff | `-C` decompile | `-e` ea | `-c` crawl |
+| `-w` deepcrawl | `-r` restart | `-p` crawl-path | `-o` crawl-out |
+| `-L` crawl-limit | `-t` doctor | `-f` fix | `-u` update/upgrade |
+| `-l` list | `-H` hvci-only | `-g` sign-verify | `-X` hashes-only |
+| `-P` poc | `-S` strings | `-y` yara-rule | `-b` burnt-check |
+| `-E` explain | `-m` max-strings | `-z` offline-mode | `-O` output |
+| `-q` quiet | `-vv` verbose | `-j` jobs | `-F` filter |
+| `-n` no-patterns | `-V` version | | |
+
+Run `byovdsn1per --help` for the authoritative list.
 
 CVE matcher:
 
