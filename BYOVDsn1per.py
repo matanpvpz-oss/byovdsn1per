@@ -5105,42 +5105,219 @@ def _sha256_file(path: str) -> str:
     except OSError:
         return ''
 
-def _update() -> int:
+# All artifacts the installer (install.ps1) lays down, so repair can restore
+# the full install -- not just the main script.
+INSTALL_ARTIFACTS = ('BYOVDsn1per.py', 'BYOVDsn1per.cmd', 'README.md')
+
+
+def _install_dir() -> str:
+    return os.path.join(os.environ.get('LOCALAPPDATA', ''), 'Programs', 'BYOVDsn1per')
+
+
+def _deploy_artifacts(source_dir: str, install_dir: str):
+    """Refresh every install artifact (main script, .cmd launcher, lowercase
+    alias, README) that is missing or differs from source. Idempotent and
+    self-copy-safe (a no-op when run from the install dir). Returns
+    (actions, errors) as lists of human-readable strings."""
     import shutil as _sh
-    source_path = os.path.abspath(__file__)
-    install_dir = os.path.join(os.environ.get('LOCALAPPDATA', ''),
-                               'Programs', 'BYOVDsn1per')
-    installed_path = os.path.join(install_dir, 'BYOVDsn1per.py')
-    source_hash = _sha256_file(source_path)
-    installed_hash = _sha256_file(installed_path)
-    print(f"{C.BOLD}BYOVDsn1per --update{C.RESET}")
-    print(f"  source:    {source_path}  ({VERSION}, sha256={source_hash[:16]}...)")
-    if source_path == installed_path:
-        print(f"  {C.YELLOW}source IS the installed binary -- nothing to do{C.RESET}")
-        return 0
-    if installed_hash == source_hash:
-        print(f"  installed: {installed_path}")
-        print(f"  {C.GREEN}+ already up to date ({VERSION}){C.RESET}")
-        return 0
+    actions, errors = [], []
     try:
         os.makedirs(install_dir, exist_ok=True)
-        _sh.copy2(source_path, installed_path)
-        cmd_src = os.path.join(os.path.dirname(source_path), 'BYOVDsn1per.cmd')
-        if os.path.isfile(cmd_src):
-            _sh.copy2(cmd_src, os.path.join(install_dir, 'BYOVDsn1per.cmd'))
-            _sh.copy2(cmd_src, os.path.join(install_dir, 'byovdsn1per.cmd'))
-        new_hash = _sha256_file(installed_path)
-        if installed_hash:
-            print(f"  installed: {installed_path}")
-            print(f"  {C.DIM}was: sha256={installed_hash[:16]}...{C.RESET}")
-        else:
-            print(f"  installed: {installed_path}  (was missing)")
-        print(f"  {C.GREEN}+ updated to {VERSION}  (sha256={new_hash[:16]}...){C.RESET}")
-        return 0
     except OSError as e:
-        print(f"  {C.RED}- update failed: {e}{C.RESET}")
+        return actions, [f'create {install_dir}: {e}']
+    for fn in INSTALL_ARTIFACTS:
+        src = os.path.join(source_dir, fn)
+        dst = os.path.join(install_dir, fn)
+        if not os.path.isfile(src):
+            if fn == 'README.md':
+                continue                      # optional; absence is not an error
+            errors.append(f'source missing: {fn}')
+            continue
+        if os.path.abspath(src) == os.path.abspath(dst):
+            continue                          # running from the install dir
+        try:
+            if (not os.path.isfile(dst)) or _sha256_file(src) != _sha256_file(dst):
+                _sh.copy2(src, dst)
+                actions.append(f'deployed {fn}')
+        except OSError as e:
+            errors.append(f'copy {fn}: {e}')
+    # lowercase alias is a copy of the launcher (case-insensitive command name)
+    launcher = os.path.join(install_dir, 'BYOVDsn1per.cmd')
+    alias = os.path.join(install_dir, 'byovdsn1per.cmd')
+    if os.path.isfile(launcher):
+        try:
+            if (not os.path.isfile(alias)) or _sha256_file(launcher) != _sha256_file(alias):
+                _sh.copy2(launcher, alias)
+                actions.append('deployed byovdsn1per.cmd (lowercase alias)')
+        except OSError as e:
+            errors.append(f'alias: {e}')
+    return actions, errors
+
+
+def _user_path_has(install_dir: str):
+    """(present, available). present=on user PATH; available=can we inspect it.
+    Windows reads HKCU\\Environment; elsewhere PATH is not user-persistable here."""
+    if os.name != 'nt':
+        return (False, False)
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, 'Environment') as key:
+            try:
+                cur, _ = winreg.QueryValueEx(key, 'Path')
+            except FileNotFoundError:
+                cur = ''
+    except Exception:
+        return (False, False)
+    norm = os.path.normcase(os.path.normpath(install_dir))
+    present = any(os.path.normcase(os.path.normpath(p)) == norm
+                  for p in (cur or '').split(';') if p)
+    return (present, True)
+
+
+def _ensure_user_path(install_dir: str):
+    """Windows: prepend install_dir to the persistent user PATH if absent,
+    preserving the existing value and its registry type, then broadcast the
+    change so new shells pick it up. Returns (changed, message)."""
+    if os.name != 'nt':
+        return (False, 'not on Windows -- user PATH not modified')
+    try:
+        import winreg, ctypes
+    except Exception as e:
+        return (False, f'winreg unavailable: {e}')
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, 'Environment', 0,
+                            winreg.KEY_READ | winreg.KEY_WRITE) as key:
+            try:
+                cur, typ = winreg.QueryValueEx(key, 'Path')
+            except FileNotFoundError:
+                cur, typ = '', winreg.REG_EXPAND_SZ
+            parts = [p for p in (cur or '').split(';') if p]
+            norm = os.path.normcase(os.path.normpath(install_dir))
+            if any(os.path.normcase(os.path.normpath(p)) == norm for p in parts):
+                return (False, 'already on user PATH')
+            new_val = ';'.join([install_dir] + parts)
+            winreg.SetValueEx(key, 'Path', 0, typ or winreg.REG_EXPAND_SZ, new_val)
+    except OSError as e:
+        return (False, f'PATH update failed: {e}')
+    try:
+        HWND_BROADCAST, WM_SETTINGCHANGE, SMTO_ABORTIFHUNG = 0xFFFF, 0x1A, 0x2
+        ctypes.windll.user32.SendMessageTimeoutW(
+            HWND_BROADCAST, WM_SETTINGCHANGE, 0, 'Environment',
+            SMTO_ABORTIFHUNG, 5000, ctypes.byref(ctypes.c_ulong()))
+    except Exception:
+        pass
+    return (True, 'added to user PATH (open a NEW terminal to pick it up)')
+
+
+def _ensure_pefile(do_install: bool):
+    """Report pefile (the pattern matcher's PE parser); pip-install it when
+    do_install and it's missing. Best-effort -- never raises. Returns
+    (ok, message)."""
+    try:
+        import pefile
+        return (True, f'present (v{getattr(pefile, "__version__", "?")})')
+    except ImportError:
+        if not do_install:
+            return (False, 'missing -- pattern matcher (--patterns) disabled; '
+                           'fix with: pip install pefile')
+    try:
+        r = subprocess.run([sys.executable, '-m', 'pip', 'install', 'pefile'],
+                           capture_output=True, text=True, timeout=180)
+    except Exception as e:
+        return (False, f'pip install pefile errored: {e}')
+    if r.returncode == 0:
+        return (True, 'installed via pip')
+    tail = (r.stderr or r.stdout or '').strip().splitlines()
+    return (False, f'pip install failed: {tail[-1] if tail else r.returncode}')
+
+
+def _prune_sha256_cache(out_path: Path):
+    """Drop dedup-cache lines whose .sys file no longer exists and collapse
+    duplicate keys. Returns (removed, kept). Safe no-op if cache is absent."""
+    cache_file = out_path / SHA256_CACHE_FILENAME
+    if not cache_file.is_file():
+        return (0, 0)
+    keep = {}
+    removed = 0
+    try:
+        with open(cache_file, 'r', encoding='utf-8', errors='replace') as f:
+            for line in f:
+                line = line.rstrip('\n').rstrip('\r')
+                if not line or line.startswith('#'):
+                    continue
+                parts = line.split('\t', 1)
+                if len(parts) != 2 or len(parts[1]) != 64:
+                    removed += 1
+                    continue
+                name, digest = parts
+                if (out_path / name).is_file():
+                    keep[name] = digest          # last write wins, dedupes keys
+                else:
+                    removed += 1
+    except OSError:
+        return (0, 0)
+    if removed:
+        try:
+            with open(cache_file, 'w', encoding='utf-8', errors='replace') as f:
+                for name, digest in keep.items():
+                    f.write(f"{name}\t{digest}\n")
+        except OSError:
+            return (0, len(keep))
+    return (removed, len(keep))
+
+
+def _update() -> int:
+    """Maximum-repair install/refresh: redeploy every artifact that is missing
+    or stale, ensure the user PATH entry, pre-create the crawler dir, and make
+    sure the pefile dependency is present. Idempotent."""
+    source_path = os.path.abspath(__file__)
+    source_dir = os.path.dirname(source_path)
+    install_dir = _install_dir()
+    installed_path = os.path.join(install_dir, 'BYOVDsn1per.py')
+    errors = []
+    print(f"{C.BOLD}BYOVDsn1per --update{C.RESET}  {C.DIM}(full repair){C.RESET}")
+    print(f"  source:    {source_path}")
+    print(f"             {VERSION}, sha256={_sha256_file(source_path)[:16]}...")
+    print(f"  install:   {install_dir}")
+    if os.path.abspath(source_path) == os.path.abspath(installed_path):
+        print(f"  {C.YELLOW}source IS the installed binary -- verifying companions/PATH/deps only{C.RESET}")
+
+    print(f"{C.BOLD}  Artifacts{C.RESET}")
+    actions, errs = _deploy_artifacts(source_dir, install_dir)
+    errors += errs
+    if actions:
+        for a in actions:
+            print(f"    {C.GREEN}+ {a}{C.RESET}")
+    else:
+        print(f"    {C.GREEN}+ all artifacts current ({VERSION}){C.RESET}")
+    for e in errs:
+        print(f"    {C.RED}- {e}{C.RESET}")
+
+    changed, msg = _ensure_user_path(install_dir)
+    print(f"{C.BOLD}  PATH{C.RESET}")
+    print(f"    {(C.GREEN if changed else C.DIM)}{'+ ' if changed else ''}{msg}{C.RESET}")
+
+    crawl_dir = os.path.join(os.environ.get('APPDATA', '.'), 'BYOVDsn1per', 'crawler')
+    print(f"{C.BOLD}  Crawler dir{C.RESET}")
+    try:
+        existed = os.path.isdir(crawl_dir)
+        os.makedirs(crawl_dir, exist_ok=True)
+        print(f"    {C.GREEN}+ {'ready' if existed else 'created'}: {crawl_dir}{C.RESET}")
+    except OSError as e:
+        print(f"    {C.RED}- {crawl_dir}: {e}{C.RESET}")
+        errors.append(f'crawler dir: {e}')
+
+    ok, pmsg = _ensure_pefile(do_install=True)
+    print(f"{C.BOLD}  Dependency: pefile{C.RESET}")
+    print(f"    {(C.GREEN + '+ ' if ok else C.YELLOW + '- ')}{pmsg}{C.RESET}")
+
+    print()
+    if errors:
+        print(f"  {C.YELLOW}{C.BOLD}repair finished with {len(errors)} error(s){C.RESET}")
         print(f"  {C.DIM}hint: if permission denied, re-run install.ps1 from the repo dir{C.RESET}")
         return 1
+    print(f"  {C.GREEN}{C.BOLD}+ repair complete -- {VERSION} fully deployed{C.RESET}")
+    return 0
 
 def _doctor(fix: bool = False) -> int:
     import hashlib, shutil as _sh
@@ -5175,6 +5352,24 @@ def _doctor(fix: bool = False) -> int:
         print(f"  {C.DIM}    --strings / --yara-rule / --poc are modifiers; they work whenever the{C.RESET}")
         print(f"  {C.DIM}      underlying scan does (so add --quick on a no-IDA box){C.RESET}")
     print()
+    print(f"{C.BOLD}pefile (pattern matcher PE parser){C.RESET}")
+    # do_install=fix lets a single call both diagnose and (in fix mode) repair.
+    had_pefile = True
+    try:
+        import pefile  # noqa: F401
+    except ImportError:
+        had_pefile = False
+    pe_ok, pe_msg = _ensure_pefile(do_install=fix)
+    if pe_ok:
+        if fix and not had_pefile:
+            print(f"  {C.GREEN}+ {pe_msg}{C.RESET}")
+            fixed.append('pefile-installed')
+        else:
+            print(f"  {C.GREEN}import pefile: OK{C.RESET}  ({pe_msg})")
+    else:
+        print(f"  {C.YELLOW}import pefile: {pe_msg}{C.RESET}")
+        issues.append('pefile-missing')
+    print()
     print(f"{C.BOLD}Windows signing tools{C.RESET}")
     if os.name != 'nt':
         print(f"  {C.YELLOW}not on Windows -- signing verification skipped{C.RESET}")
@@ -5200,54 +5395,100 @@ def _doctor(fix: bool = False) -> int:
             print(f"  drivers: {C.GREEN}{len(sys_files)}{C.RESET}  ({total/1024/1024:.1f} MB total)")
             print(f"  checkpoint file: {'present' if os.path.isfile(ckpt) else 'missing'}")
             print(f"  sha256 cache:    {'present' if os.path.isfile(cache) else 'missing'}")
+            if os.path.isfile(cache):
+                # detect dead cache lines (file removed out from under the cache)
+                dead, _live = _prune_sha256_cache(Path(default_out)) if fix else (0, 0)
+                if fix and dead:
+                    print(f"    {C.GREEN}+ pruned {dead} stale sha256-cache entr"
+                          f"{'y' if dead == 1 else 'ies'}{C.RESET}")
+                    fixed.append('cache-pruned')
+                elif not fix:
+                    # count-only, no rewrite
+                    stale = 0
+                    try:
+                        with open(cache, 'r', encoding='utf-8', errors='replace') as cf:
+                            for ln in cf:
+                                ln = ln.rstrip('\r\n')
+                                if not ln or ln.startswith('#'):
+                                    continue
+                                nm = ln.split('\t', 1)[0]
+                                if not (Path(default_out) / nm).is_file():
+                                    stale += 1
+                    except OSError:
+                        stale = 0
+                    if stale:
+                        print(f"    {C.YELLOW}{stale} stale cache entr"
+                              f"{'y' if stale == 1 else 'ies'} "
+                              f"(--fix prunes){C.RESET}")
+                        issues.append('stale-cache-entries')
         except OSError as e:
             print(f"  {C.YELLOW}error reading dir: {e}{C.RESET}")
     print()
     print(f"{C.BOLD}Installed binary integrity (hash check){C.RESET}")
     source_path = os.path.abspath(__file__)
+    source_dir = os.path.dirname(source_path)
     source_hash = _sha256_file(source_path)
-    install_dir = os.path.join(os.environ.get('LOCALAPPDATA', ''),
-                               'Programs', 'BYOVDsn1per')
+    install_dir = _install_dir()
     installed_path = os.path.join(install_dir, 'BYOVDsn1per.py')
     installed_hash = _sha256_file(installed_path)
+    running_installed = os.path.abspath(source_path) == os.path.abspath(installed_path)
     print(f"  source:    {source_path}")
     print(f"             sha256={source_hash[:16]}...  {VERSION}")
+    print(f"  installed: {installed_path}")
     if not installed_hash:
-        print(f"  installed: {installed_path}")
         print(f"             {C.YELLOW}NOT INSTALLED -- byovdsn1per command is not on PATH from this user account{C.RESET}")
         issues.append('not-installed')
-        if fix and source_path != installed_path:
-            try:
-                os.makedirs(install_dir, exist_ok=True)
-                _sh.copy2(source_path, installed_path)
-                cmd_src = os.path.join(os.path.dirname(source_path), 'BYOVDsn1per.cmd')
-                if os.path.isfile(cmd_src):
-                    _sh.copy2(cmd_src, os.path.join(install_dir, 'BYOVDsn1per.cmd'))
-                    _sh.copy2(cmd_src, os.path.join(install_dir, 'byovdsn1per.cmd'))
-                print(f"  {C.GREEN}+ installed {VERSION} to {install_dir}{C.RESET}")
-                print(f"  {C.DIM}    NOTE: PATH update requires install.ps1 (run from repo dir){C.RESET}")
-                fixed.append('binary-deployed')
-            except OSError as e:
-                print(f"  {C.RED}- install failed: {e}{C.RESET}")
     elif installed_hash == source_hash:
-        print(f"  installed: {installed_path}")
-        print(f"             {C.GREEN}sha256 match -- installed is current ({VERSION}){C.RESET}")
+        print(f"             {C.GREEN}sha256 match -- main script current ({VERSION}){C.RESET}")
     else:
-        print(f"  installed: {installed_path}")
         print(f"             {C.YELLOW}sha256={installed_hash[:16]}...  STALE -- differs from source{C.RESET}")
         issues.append('stale-binary')
-        if fix and source_path != installed_path:
-            try:
-                _sh.copy2(source_path, installed_path)
-                cmd_src = os.path.join(os.path.dirname(source_path), 'BYOVDsn1per.cmd')
-                if os.path.isfile(cmd_src):
-                    _sh.copy2(cmd_src, os.path.join(install_dir, 'BYOVDsn1per.cmd'))
-                    _sh.copy2(cmd_src, os.path.join(install_dir, 'byovdsn1per.cmd'))
-                new_hash = _sha256_file(installed_path)
-                print(f"  {C.GREEN}+ replaced installed binary with {VERSION}  (new sha256={new_hash[:16]}...){C.RESET}")
-                fixed.append('binary-updated')
-            except OSError as e:
-                print(f"  {C.RED}- update failed (need admin? try 'install.ps1' from repo): {e}{C.RESET}")
+    # companion artifacts the installer also lays down
+    for label, pth in (
+        ('BYOVDsn1per.cmd',         os.path.join(install_dir, 'BYOVDsn1per.cmd')),
+        ('byovdsn1per.cmd (alias)', os.path.join(install_dir, 'byovdsn1per.cmd')),
+        ('README.md',               os.path.join(install_dir, 'README.md')),
+    ):
+        if os.path.isfile(pth):
+            print(f"  {C.GREEN}+ {label}{C.RESET}")
+        elif label.startswith('README'):
+            print(f"  {C.DIM}- {label}: missing (optional){C.RESET}")
+        else:
+            print(f"  {C.YELLOW}- {label}: missing{C.RESET}")
+            issues.append(f'missing-artifact:{label}')
+    if fix:
+        # self-copy-safe: when running from the install dir the main script /
+        # launcher / README are skipped, but a missing lowercase alias is still
+        # restored from the launcher.
+        actions, errs = _deploy_artifacts(source_dir, install_dir)
+        for a in actions:
+            print(f"  {C.GREEN}+ {a}{C.RESET}")
+            fixed.append(a)
+        for e in errs:
+            print(f"  {C.RED}- {e}{C.RESET}")
+        if not actions and not errs:
+            note = 'running from the install dir -- nothing to redeploy' if running_installed \
+                else 'all artifacts already current'
+            print(f"  {C.DIM}    {note}{C.RESET}")
+    print()
+    print(f"{C.BOLD}User PATH (command resolution){C.RESET}")
+    if os.name != 'nt':
+        print(f"  {C.DIM}not on Windows -- user PATH not managed here{C.RESET}")
+    else:
+        present, available = _user_path_has(install_dir)
+        if not available:
+            print(f"  {C.YELLOW}could not read user PATH from registry{C.RESET}")
+        elif present:
+            print(f"  {C.GREEN}+ install dir is on the user PATH{C.RESET}")
+        else:
+            print(f"  {C.YELLOW}- install dir NOT on user PATH "
+                  f"(byovdsn1per will not resolve in new shells){C.RESET}")
+            issues.append('not-on-path')
+            if fix:
+                changed, msg = _ensure_user_path(install_dir)
+                print(f"  {(C.GREEN + '+ ') if changed else (C.RED + '- ')}{msg}{C.RESET}")
+                if changed:
+                    fixed.append('path-added')
     print()
     print(f"{C.BOLD}Directory health{C.RESET}")
     target_dirs = [
@@ -5311,8 +5552,10 @@ def _doctor(fix: bool = False) -> int:
     print(f"{C.BOLD}Summary{C.RESET}")
     print(f"  issues found:    {len(issues)}")
     if fix:
-        print(f"  issues fixed:    {len(fixed)}")
-        remaining = len(issues) - len(fixed)
+        # repairs can exceed issues (e.g. refreshing an optional README that
+        # was never flagged), so clamp the remaining count at zero.
+        print(f"  repairs applied: {len(fixed)}")
+        remaining = max(0, len(issues) - len(fixed))
         col = C.GREEN if remaining == 0 else C.YELLOW
         print(f"  {col}remaining:       {remaining}{C.RESET}")
     elif issues:
@@ -5563,7 +5806,7 @@ def _csv_dump(results: list) -> str:
     return out.getvalue()
 
 
-VERSION = 'v2.13.1'
+VERSION = 'v2.14.0'
 
 USAGE_EPILOG = r"""
 =========================================================================
@@ -5628,9 +5871,9 @@ ADD-ONS BY MODE -- only flags listed under a mode work with that mode
     --ea ADDR            (required) effective address to decompile
 
   Standalone shortcuts -- ignore DRIVER, exit immediately:
-    --doctor             verify install + paths
-    --doctor --fix       auto-repair: redeploy binary, create dirs, clear caches
-    --update             one-shot self-update from source dir to installed dir
+    --doctor             verify install: idalib, pefile, signtool, user PATH, paths
+    --doctor --fix       MAX repair: redeploy all artifacts + user PATH + pefile + dirs + caches
+    --update / --upgrade full-repair self-update (artifacts + PATH + crawler dir + pefile)
     --list               summarise the crawler dir
     --last-sweep         re-display most recent sweep JSON
     --show FILE          re-display any sweep JSON
@@ -5736,11 +5979,14 @@ def main():
 
     shortcut = p.add_argument_group('Standalone shortcuts (single driver, no full scan)')
     shortcut.add_argument('--doctor', action='store_true',
-                          help='verify install: Python version, idalib, signtool/PowerShell, paths, crawler dir')
+                          help='verify install: Python, idalib, pefile, signtool/PowerShell, user PATH, paths, crawler dir')
     shortcut.add_argument('--fix', action='store_true',
-                          help='[with --doctor] auto-repair: redeploy stale installed binary, create missing dirs, clear stale caches')
-    shortcut.add_argument('--update', action='store_true',
-                          help='self-update: hash-verify and redeploy this source to %%LOCALAPPDATA%%\\Programs\\BYOVDsn1per\\ (no diagnose)')
+                          help='[with --doctor] MAXIMUM repair: redeploy all artifacts (script/.cmd/alias/README), '
+                               'add install dir to user PATH, pip-install pefile, create missing dirs, '
+                               'prune stale caches/__pycache__')
+    shortcut.add_argument('--update', '--upgrade', action='store_true',
+                          help='full-repair self-update: redeploy every stale/missing artifact, ensure user PATH, '
+                               'pre-create crawler dir, pip-install pefile (== install.ps1 minus admin)')
     shortcut.add_argument('--list', action='store_true',
                           help='list what is in the crawler dir (count, size, top signers) and exit')
     shortcut.add_argument('--last-sweep', action='store_true',

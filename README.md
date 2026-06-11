@@ -22,9 +22,18 @@ Also: `--diff` for side-by-side comparison of two drivers, `--strings` with rege
 powershell -ExecutionPolicy Bypass -File install.ps1
 ```
 
-Copies the script to `%LOCALAPPDATA%\Programs\BYOVDsn1per\` and adds it to your user PATH. No admin needed. Open a new terminal and `byovdsn1per --version` should print v2.13.
+Copies the script to `%LOCALAPPDATA%\Programs\BYOVDsn1per\` and adds it to your user PATH. No admin needed. Open a new terminal and `byovdsn1per --version` should print v2.14.
 
-After install, run `byovdsn1per --doctor` to confirm Python, idalib, and the Windows signing tools are reachable from PATH. It also shows where the default crawl output dir resolves on your machine.
+After install, run `byovdsn1per --doctor` to confirm Python, idalib, pefile, the Windows signing tools, **and the user PATH entry** are all in place. It also shows where the default crawl output dir resolves on your machine.
+
+### Repair without re-running the installer
+
+Two commands rebuild a broken or partial install without touching `install.ps1`:
+
+- `byovdsn1per --doctor --fix` — maximum repair. Redeploys every install artifact that's missing or stale (main script, `.cmd` launcher, lowercase alias, README), **adds the install dir to your user PATH** (Windows, via `HKCU\Environment` + a settings broadcast), pip-installs `pefile` if it's missing, creates the crawler/results dirs, and prunes stale `__pycache__` and dead sha256-cache entries. Idempotent; safe to re-run.
+- `byovdsn1per --update` (alias `--upgrade`) — the same full repair, focused on the install: redeploy stale/missing artifacts, ensure the PATH entry, pre-create the crawler dir, and install `pefile`. This is `install.ps1` minus the admin-y bits, runnable from a plain shell.
+
+Both report a per-item checklist and exit non-zero if anything couldn't be repaired (e.g. a permission-denied copy, or `pip` blocked by your network policy).
 
 Uninstall: `.\install.ps1 -Uninstall`.
 
