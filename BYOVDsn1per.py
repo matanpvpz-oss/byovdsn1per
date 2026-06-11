@@ -1494,19 +1494,19 @@ def hvci_flags(path: str) -> dict:
         return {"error": f"open: {e}"}
 
 def file_hashes_from_buf(buf: bytes) -> dict:
-    h_md5 = hashlib.md5()
-    h_sha1 = hashlib.sha1()
-    h_sha256 = hashlib.sha256()
-                                                                                 
-    for i in range(0, len(buf), 65536):
-        chunk = buf[i:i+65536]
-        h_md5.update(chunk)
-        h_sha1.update(chunk)
-        h_sha256.update(chunk)
+    # buf is already wholly in memory, so feed each digest the whole buffer in
+    # one call. The old per-64K slice loop allocated a fresh copy of every
+    # chunk and held the GIL across the whole loop; whole-buffer updates make
+    # no copies and release the GIL for each pass, so a parallel sweep worker
+    # waiting on PowerShell can run while another hashes. (The compression
+    # cost itself is unchanged -- this is allocator/GIL hygiene, not a CPU cut;
+    # the CPU-strain win comes from not oversubscribing workers, see
+    # _resolve_jobs.) Same digests.
+    mv = memoryview(buf)
     return {
-        'md5':    h_md5.hexdigest(),
-        'sha1':   h_sha1.hexdigest(),
-        'sha256': h_sha256.hexdigest(),
+        'md5':    hashlib.md5(mv).hexdigest(),
+        'sha1':   hashlib.sha1(mv).hexdigest(),
+        'sha256': hashlib.sha256(mv).hexdigest(),
         'size':   len(buf),
     }
 
@@ -5046,16 +5046,19 @@ def full_scan(driver_path: str, depth: int, no_flirt: bool, deep: bool, no_decom
     return r
 
 def _resolve_jobs(requested: int) -> int:
-    """Worker count for I/O-bound parallel scanning. 0/negative -> auto.
+    """Worker count for parallel scanning. 0/negative -> auto.
 
-    The parallel paths (--quick sweep, crawl read+hash) are dominated by
-    subprocess wait (PowerShell signing) and disk I/O, so we oversubscribe
-    the CPU count rather than matching it.
+    Auto tracks the core count (capped at 8), it does NOT oversubscribe.
+    Both parallel paths have a CPU-heavy component -- SHA-256 in the crawl,
+    and one PowerShell process per worker in a --quick sweep -- so going past
+    the core count just thrashes the scheduler and pins every core for little
+    wall-clock gain. Matching cores keeps them busy without the strain;
+    bump it explicitly with -j N if you know your workload is pure wait.
     """
     if requested and requested > 0:
         return requested
     cpu = os.cpu_count() or 4
-    return max(2, min(16, cpu * 4))
+    return max(2, min(8, cpu))
 
 
 def _sweep_analyze_one(b, args) -> dict:
@@ -5560,7 +5563,7 @@ def _csv_dump(results: list) -> str:
     return out.getvalue()
 
 
-VERSION = 'v2.13.0'
+VERSION = 'v2.13.1'
 
 USAGE_EPILOG = r"""
 =========================================================================
@@ -5598,7 +5601,7 @@ ADD-ONS BY MODE -- only flags listed under a mode work with that mode
     --burnt-check      drop drivers signed by burnt certificates  *
     --filter TIER      only show STRONG / PERFECT (TIER = perfect | partial | any)  *
     --size-cap N       skip drivers > N MB
-    --jobs N / -j N    parallel workers (--quick/--patterns-only sweeps; default auto)
+    --jobs N / -j N    parallel workers (--quick/--patterns-only sweeps; default = cores, max 8)
     --output FMT       table | json | markdown | csv
     --json-out FILE    also write sweep JSON to FILE
     --quiet            one-line verdict per driver
@@ -5610,7 +5613,7 @@ ADD-ONS BY MODE -- only flags listed under a mode work with that mode
     --crawl-no-defaults     skip default Windows roots; only walk --crawl-path
     --crawl-no-checkpoint   disable .scanned_paths.txt + sha256 cache
     --restart               wipe checkpoint + start fresh  (alone implies --deepcrawl)
-    --jobs N / -j N         parallel read+hash workers (default auto, ~4x CPU)
+    --jobs N / -j N         parallel read+hash workers (default = cores, max 8)
 
   With single-driver (default / --all / --deep / --quick):
     --poc              CVE matcher (no exploit, just fingerprint)
@@ -5776,8 +5779,9 @@ def main():
     tuning.add_argument('--size-cap', type=float, default=1.5,
                         help='[single|sweep] skip drivers > N MB (default 1.5)')
     tuning.add_argument('--jobs', '-j', type=int, default=0, metavar='N',
-                        help='[crawl|sweep] parallel workers for I/O-bound scanning '
-                             '(default 0 = auto, ~4x CPU capped at 16; 1 = serial). '
+                        help='[crawl|sweep] parallel workers '
+                             '(default 0 = auto = core count capped at 8, no '
+                             'oversubscription; 1 = serial). '
                              'Full IDA sweeps always run single-threaded (idalib is '
                              'not thread-safe); applies to crawl and --quick/--patterns-only sweeps.')
     tuning.add_argument('--filter', choices=['perfect', 'partial', 'any'], default='any',

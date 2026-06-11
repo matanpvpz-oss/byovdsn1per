@@ -193,7 +193,9 @@ The scoring mixes primitive count, gate count, archetype tags, and DACL signal s
 
 ## Speed
 
-Both scanning phases parallelize the I/O-bound work across workers, controlled by `--jobs`/`-j` (default `0` = auto, roughly 4× CPU count capped at 16; pass `-j 1` to force serial).
+The CPU-strain knob is `--jobs`/`-j` (default `0` = auto = core count, capped at 8; `-j 1` forces serial). Auto deliberately does **not** oversubscribe: both parallel phases have a CPU-heavy component — SHA-256 in the crawl, and one PowerShell process per worker in a `--quick` sweep — so spawning several workers per core just pins every core (and floods the box with PowerShell processes) for little wall-clock gain. Matching the core count keeps the cores busy without the thrash. Bump `-j` higher only if you know your workload is pure wait.
+
+Per-file hashing feeds each digest the whole in-memory buffer in one pass rather than re-slicing it into 64 KB copies per digest. The compression cost is the same, but it drops the per-chunk allocations and releases the GIL across each pass, so a worker blocked on PowerShell can run while another hashes. Digests are identical.
 
 - **Crawl** fans out the per-file read + SHA-256 (the per-`.sys` hot path). Dedup, copy, and checkpoint bookkeeping stay on the main thread, so results — including which copy wins a hash collision — are identical to a serial run.
 - **Sweep** fans out per-driver analysis for `--quick` and `--patterns-only`, where the dominant cost is the `Get-AuthenticodeSignature` PowerShell subprocess. On a signing-bound sweep this scales close to linearly with worker count.
