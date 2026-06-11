@@ -22,7 +22,7 @@ Also: `--diff` for side-by-side comparison of two drivers, `--strings` with rege
 powershell -ExecutionPolicy Bypass -File install.ps1
 ```
 
-Copies the script to `%LOCALAPPDATA%\Programs\BYOVDsn1per\` and adds it to your user PATH. No admin needed. Open a new terminal and `byovdsn1per --version` should print v2.5.
+Copies the script to `%LOCALAPPDATA%\Programs\BYOVDsn1per\` and adds it to your user PATH. No admin needed. Open a new terminal and `byovdsn1per --version` should print v2.13.
 
 After install, run `byovdsn1per --doctor` to confirm Python, idalib, and the Windows signing tools are reachable from PATH. It also shows where the default crawl output dir resolves on your machine.
 
@@ -190,6 +190,17 @@ SKIP         < 30  anti-cheat archetype penalty, etc.
 Score gets capped by HVCI status. No FORCE_INTEGRITY: cap 80. No GuardCF or has init-WX: cap 60. Full HVCI pass: uncapped.
 
 The scoring mixes primitive count, gate count, archetype tags, and DACL signal so the verdict isn't reducible to one number.
+
+## Speed
+
+Both scanning phases parallelize the I/O-bound work across workers, controlled by `--jobs`/`-j` (default `0` = auto, roughly 4× CPU count capped at 16; pass `-j 1` to force serial).
+
+- **Crawl** fans out the per-file read + SHA-256 (the per-`.sys` hot path). Dedup, copy, and checkpoint bookkeeping stay on the main thread, so results — including which copy wins a hash collision — are identical to a serial run.
+- **Sweep** fans out per-driver analysis for `--quick` and `--patterns-only`, where the dominant cost is the `Get-AuthenticodeSignature` PowerShell subprocess. On a signing-bound sweep this scales close to linearly with worker count.
+
+Detection is unchanged: every driver runs the exact same analysis function whether the sweep is serial or parallel; only the iteration strategy differs, and the final ordering is still by score.
+
+A **full IDA sweep stays single-threaded** regardless of `-j`. `idalib` holds global, single-database process state and is not thread-safe, so parallelizing it in-process would corrupt analysis. Use `--quick` (or per-driver subprocesses of your own) if you need the disassembly path to scale across cores.
 
 ## A few implementation notes
 

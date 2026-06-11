@@ -2835,7 +2835,8 @@ def _norm_dir(d: str) -> str:
 def crawl_drivers(roots, out_dir: str, max_files: int = 0,
                   verbose: bool = False, progress_every: int = 500,
                   use_checkpoint: bool = True,
-                  clear_checkpoint_first: bool = False) -> dict:
+                  clear_checkpoint_first: bool = False,
+                  jobs: int = 1) -> dict:
     out_path = Path(out_dir)
     out_path.mkdir(parents=True, exist_ok=True)
 
@@ -2886,6 +2887,18 @@ def crawl_drivers(roots, out_dir: str, max_files: int = 0,
             except OSError:
                 pass
 
+    def _safe_check(path):
+        try:
+            return quick_check_and_hash(path)
+        except Exception:
+            return ('ERR', None)
+
+    executor = None
+    if jobs and jobs > 1:
+        from concurrent.futures import ThreadPoolExecutor
+        executor = ThreadPoolExecutor(max_workers=jobs)
+        print(f"  [parallel] {jobs} read+hash workers")
+
     try:
         for root in roots:
             if not os.path.isdir(root):
@@ -2916,6 +2929,8 @@ def crawl_drivers(roots, out_dir: str, max_files: int = 0,
                     stats['dirs_skipped'] += 1
                     continue
                                                  
+                # Count every file (and emit progress); collect .sys candidates.
+                sys_paths = []
                 for fn in files:
                     stats['scanned_files'] += 1
                     if progress_every and stats['scanned_files'] % progress_every == 0:
@@ -2925,43 +2940,52 @@ def crawl_drivers(roots, out_dir: str, max_files: int = 0,
                     if not fn.lower().endswith('.sys'):
                         continue
                     stats['sys_found'] += 1
-                    full = os.path.join(dirpath, fn)
-                                                                                
-                    try:
-                        is_drv, h = quick_check_and_hash(full)
-                    except Exception:
-                        stats['errors'] += 1
-                        continue
-                    if not is_drv:
-                                                                           
-                        continue
-                    stats['kernel_drivers'] += 1
-                    if h in seen_hashes:
-                        stats['duplicates'] += 1
-                        continue
-                    seen_hashes.add(h)
-                    dst_name = f"{Path(fn).stem}_{h[:8]}.sys"
-                    dst = out_path / dst_name
-                    try:
-                        shutil.copy2(full, dst)
-                        stats['copied'] += 1
-                        stats['copied_paths'].append(str(dst))
-                                                                            
-                        _append_sha256_cache(out_path, dst_name, h)
-                        if verbose:
-                            print(f"    [copy] {full} -> {dst.name}")
-                    except OSError as e:
-                        stats['errors'] += 1
-                        if verbose:
-                            print(f"    [err] copy failed: {full}: {e}")
-                        continue
-                    if max_files and stats['copied'] >= max_files:
-                        return stats
-                                                                         
+                    sys_paths.append((fn, os.path.join(dirpath, fn)))
+
+                # Read + hash candidates. This is the per-file hot path
+                # (full read + SHA-256); fan it out across workers when -j>1.
+                # The filter verdict and hash are identical to the serial path
+                # -- same quick_check_and_hash -- so detection is unchanged.
+                if sys_paths:
+                    fulls = [full for _, full in sys_paths]
+                    if executor is not None:
+                        checked = list(executor.map(_safe_check, fulls))
+                    else:
+                        checked = [_safe_check(f) for f in fulls]
+                    for (fn, full), (is_drv, h) in zip(sys_paths, checked):
+                        if is_drv == 'ERR':
+                            stats['errors'] += 1
+                            continue
+                        if not is_drv:
+                            continue
+                        stats['kernel_drivers'] += 1
+                        if h in seen_hashes:
+                            stats['duplicates'] += 1
+                            continue
+                        seen_hashes.add(h)
+                        dst_name = f"{Path(fn).stem}_{h[:8]}.sys"
+                        dst = out_path / dst_name
+                        try:
+                            shutil.copy2(full, dst)
+                            stats['copied'] += 1
+                            stats['copied_paths'].append(str(dst))
+                            _append_sha256_cache(out_path, dst_name, h)
+                            if verbose:
+                                print(f"    [copy] {full} -> {dst.name}")
+                        except OSError as e:
+                            stats['errors'] += 1
+                            if verbose:
+                                print(f"    [err] copy failed: {full}: {e}")
+                            continue
+                        if max_files and stats['copied'] >= max_files:
+                            return stats
+
                 _mark_dir_done(dirpath)
                                        
             _mark_dir_done(root)
     finally:
+        if executor is not None:
+            executor.shutdown(wait=True)
         if ckpt_fh is not None:
             try:
                 ckpt_fh.close()
@@ -5021,6 +5045,52 @@ def full_scan(driver_path: str, depth: int, no_flirt: bool, deep: bool, no_decom
         r['verify_load'] = signtool_kp(driver_path)
     return r
 
+def _resolve_jobs(requested: int) -> int:
+    """Worker count for I/O-bound parallel scanning. 0/negative -> auto.
+
+    The parallel paths (--quick sweep, crawl read+hash) are dominated by
+    subprocess wait (PowerShell signing) and disk I/O, so we oversubscribe
+    the CPU count rather than matching it.
+    """
+    if requested and requested > 0:
+        return requested
+    cpu = os.cpu_count() or 4
+    return max(2, min(16, cpu * 4))
+
+
+def _sweep_analyze_one(b, args) -> dict:
+    """Per-driver scan used by --sweep, factored out so the sequential and
+    parallel code paths run the EXACT same analysis (detection is unchanged;
+    only the iteration strategy differs).
+    """
+    if args.quick:
+        r = quick_scan(str(b), offline=args.offline_mode)
+    else:
+        r = full_scan(str(b), args.depth, False,
+                      args.deep, False, args.verify_load,
+                      offline=args.offline_mode,
+                      pattern_dir=args.patterns,
+                      do_patterns=not args.no_patterns,
+                      patterns_only=args.patterns_only)
+    r['path'] = str(b)
+    r['cve_matches'] = match_cves(r)
+    sc, tr = perfect_score(r)
+    r['_score'] = sc
+    r['_tier'] = tr
+    sev, sev_label = severity_score(r)
+    r['_severity'] = sev
+    r['_severity_label'] = sev_label
+    if args.strings:
+        s = extract_strings(str(b))
+        if 'top_ascii' in s:
+            s['top_ascii'] = s['top_ascii'][:args.max_strings]
+        if 'top_utf16' in s:
+            s['top_utf16'] = s['top_utf16'][:args.max_strings]
+        r['strings'] = s
+    if args.yara_rule:
+        r['yara_rule'] = emit_yara_rule(r)
+    return r
+
 def _sha256_file(path: str) -> str:
     import hashlib
     h = hashlib.sha256()
@@ -5490,7 +5560,7 @@ def _csv_dump(results: list) -> str:
     return out.getvalue()
 
 
-VERSION = 'v2.12.0'
+VERSION = 'v2.13.0'
 
 USAGE_EPILOG = r"""
 =========================================================================
@@ -5528,6 +5598,7 @@ ADD-ONS BY MODE -- only flags listed under a mode work with that mode
     --burnt-check      drop drivers signed by burnt certificates  *
     --filter TIER      only show STRONG / PERFECT (TIER = perfect | partial | any)  *
     --size-cap N       skip drivers > N MB
+    --jobs N / -j N    parallel workers (--quick/--patterns-only sweeps; default auto)
     --output FMT       table | json | markdown | csv
     --json-out FILE    also write sweep JSON to FILE
     --quiet            one-line verdict per driver
@@ -5539,6 +5610,7 @@ ADD-ONS BY MODE -- only flags listed under a mode work with that mode
     --crawl-no-defaults     skip default Windows roots; only walk --crawl-path
     --crawl-no-checkpoint   disable .scanned_paths.txt + sha256 cache
     --restart               wipe checkpoint + start fresh  (alone implies --deepcrawl)
+    --jobs N / -j N         parallel read+hash workers (default auto, ~4x CPU)
 
   With single-driver (default / --all / --deep / --quick):
     --poc              CVE matcher (no exploit, just fingerprint)
@@ -5703,6 +5775,11 @@ def main():
                         help='[single|sweep] BFS depth for callee walks (default 3)')
     tuning.add_argument('--size-cap', type=float, default=1.5,
                         help='[single|sweep] skip drivers > N MB (default 1.5)')
+    tuning.add_argument('--jobs', '-j', type=int, default=0, metavar='N',
+                        help='[crawl|sweep] parallel workers for I/O-bound scanning '
+                             '(default 0 = auto, ~4x CPU capped at 16; 1 = serial). '
+                             'Full IDA sweeps always run single-threaded (idalib is '
+                             'not thread-safe); applies to crawl and --quick/--patterns-only sweeps.')
     tuning.add_argument('--filter', choices=['perfect', 'partial', 'any'], default='any',
                         help='[sweep-only] only show drivers >= tier')
     tuning.add_argument('--patterns', metavar='DIR', default=DEFAULT_PATTERN_DIR,
@@ -5820,6 +5897,7 @@ def main():
             verbose=args.verbose,
             use_checkpoint=not args.crawl_no_checkpoint,
             clear_checkpoint_first=args.restart,
+            jobs=_resolve_jobs(args.jobs),
         )
         dt = time.time() - t0
         print()
@@ -6002,60 +6080,90 @@ def main():
         sweep_start = time.time()
         recent_times = deque(maxlen=20)
         print(f"[BYOVDsn1per] started at {time.strftime('%H:%M:%S')}")
-        print()
 
-        try:
-            for i, b in enumerate(bins, 1):
-                t_drv = time.time()
-                print(f"  [{i}/{len(bins)}] {b.name[:40]}...", end='', flush=True)
-                if args.quick:
-                    r = quick_scan(str(b), offline=args.offline_mode)
-                else:
-                    r = full_scan(str(b), args.depth, False,
-                                  args.deep, False, args.verify_load,
-                                  offline=args.offline_mode,
-                                  pattern_dir=args.patterns,
-                                  do_patterns=not args.no_patterns,
-                                  patterns_only=args.patterns_only)
-                r['path'] = str(b)
-                r['cve_matches'] = match_cves(r)
-                sc, tr = perfect_score(r)
-                r['_score'] = sc
-                r['_tier'] = tr
-                sev, sev_label = severity_score(r)
-                r['_severity'] = sev
-                r['_severity_label'] = sev_label
-                if args.strings:
-                    s = extract_strings(str(b))
-                    if 'top_ascii' in s:
-                        s['top_ascii'] = s['top_ascii'][:args.max_strings]
-                    if 'top_utf16' in s:
-                        s['top_utf16'] = s['top_utf16'][:args.max_strings]
-                    r['strings'] = s
-                if args.yara_rule:
-                    r['yara_rule'] = emit_yara_rule(r)
-                dt_drv = time.time() - t_drv
-                recent_times.append(dt_drv)
-                eta_str = ''
-                if recent_times and i < len(bins):
-                    avg = sum(recent_times) / len(recent_times)
-                    eta_str = f" eta={_format_eta(avg * (len(bins) - i))}"
-                print(f" {tr} ({sc}) t={r.get('analyze_time_s',0):.1f}s{eta_str}", end='')
-                if args.poc and r.get('cve_matches'):
-                    strong = [m for m in r['cve_matches']
-                              if m.get('confidence') in ('CONFIRMED', 'HIGH', 'MEDIUM')]
-                    if strong:
-                        tags = ','.join(f"{m['cve']}({m['confidence'][0]})" for m in strong[:3])
-                        print(f" cves={tags}", end='')
-                print()
-                results.append(r)
-                if i % 10 == 0:
-                    _flush_results()
-        except KeyboardInterrupt:
-            interrupted = True
+        # idalib carries global, single-database process state and is NOT
+        # thread-safe, so a full IDA sweep must stay serial. --quick and
+        # --patterns-only never enter IDA, so those fan out across workers.
+        # Detection is identical either way -- each driver runs the exact same
+        # _sweep_analyze_one(); only the iteration strategy changes.
+        ida_sweep = (not args.quick) and (not args.patterns_only)
+        jobs = 1 if ida_sweep else _resolve_jobs(args.jobs)
+        jobs = max(1, min(jobs, len(bins)))
+
+        def _poc_tags(r):
+            if not (args.poc and r.get('cve_matches')):
+                return ''
+            strong = [m for m in r['cve_matches']
+                      if m.get('confidence') in ('CONFIRMED', 'HIGH', 'MEDIUM')]
+            if not strong:
+                return ''
+            return ' cves=' + ','.join(
+                f"{m['cve']}({m['confidence'][0]})" for m in strong[:3])
+
+        if jobs > 1:
+            # Pre-warm the shared pattern cache once in the main thread so
+            # workers don't race to populate it on first use.
+            if args.patterns_only and not args.no_patterns:
+                _load_pattern_db(args.patterns)
+            print(f"[BYOVDsn1per] {jobs} parallel workers (I/O-bound; "
+                  f"override with -j N)")
             print()
-            print(f"{C.YELLOW}{C.BOLD}[BYOVDsn1per] Interrupted (Ctrl+C){C.RESET}")
-            print(f"  processed: {len(results)}/{len(bins)} drivers")
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            ex = ThreadPoolExecutor(max_workers=jobs)
+            futs = {ex.submit(_sweep_analyze_one, b, args): b for b in bins}
+            done = 0
+            try:
+                for fut in as_completed(futs):
+                    b = futs[fut]
+                    try:
+                        r = fut.result()
+                    except Exception as e:  # one bad driver must not kill the sweep
+                        r = {'driver': str(b), 'path': str(b),
+                             'error': f'{type(e).__name__}: {e}',
+                             '_score': 0, '_tier': 'SKIP'}
+                    done += 1
+                    sc, tr = r.get('_score', 0), r.get('_tier', '?')
+                    eta_str = ''
+                    if done < len(bins):
+                        elapsed = time.time() - sweep_start
+                        eta_str = f" eta={_format_eta(elapsed / done * (len(bins) - done))}"
+                    print(f"  [{done}/{len(bins)}] {b.name[:40]} {tr} ({sc}) "
+                          f"t={r.get('analyze_time_s',0):.1f}s{eta_str}{_poc_tags(r)}",
+                          flush=True)
+                    results.append(r)
+                    if done % 10 == 0:
+                        _flush_results()
+                ex.shutdown(wait=True)
+            except KeyboardInterrupt:
+                interrupted = True
+                ex.shutdown(wait=False, cancel_futures=True)
+                print()
+                print(f"{C.YELLOW}{C.BOLD}[BYOVDsn1per] Interrupted (Ctrl+C){C.RESET}")
+                print(f"  processed: {len(results)}/{len(bins)} drivers")
+        else:
+            print()
+            try:
+                for i, b in enumerate(bins, 1):
+                    t_drv = time.time()
+                    print(f"  [{i}/{len(bins)}] {b.name[:40]}...", end='', flush=True)
+                    r = _sweep_analyze_one(b, args)
+                    dt_drv = time.time() - t_drv
+                    recent_times.append(dt_drv)
+                    sc, tr = r.get('_score', 0), r.get('_tier', '?')
+                    eta_str = ''
+                    if recent_times and i < len(bins):
+                        avg = sum(recent_times) / len(recent_times)
+                        eta_str = f" eta={_format_eta(avg * (len(bins) - i))}"
+                    print(f" {tr} ({sc}) t={r.get('analyze_time_s',0):.1f}s{eta_str}"
+                          f"{_poc_tags(r)}")
+                    results.append(r)
+                    if i % 10 == 0:
+                        _flush_results()
+            except KeyboardInterrupt:
+                interrupted = True
+                print()
+                print(f"{C.YELLOW}{C.BOLD}[BYOVDsn1per] Interrupted (Ctrl+C){C.RESET}")
+                print(f"  processed: {len(results)}/{len(bins)} drivers")
 
         if args.burnt_check:
             burnt = [r for r in results if r.get('signing', {}).get('burnt_status', '').startswith('BURNT')]
